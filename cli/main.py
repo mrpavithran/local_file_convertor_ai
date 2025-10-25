@@ -1,43 +1,47 @@
-#!/usr/bin/env python3
 """
-Main CLI entry point for AI File System operations.
+Main CLI entry point - Fixed version
 """
 
-import argparse
 import sys
 import os
-from pathlib import Path
 
 # Add the project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-from cli.command_parser import CommandParser
-from cli.interactive_mode import InteractiveMode
-from core.config_manager import ConfigManager
-
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 def main():
-    """Main CLI entry point."""
+    """Main entry point for the CLI"""
     try:
-        # Initialize configuration
-        ConfigManager.initialize()
+        from cli.command_parser import CommandParser
         
-        parser = CommandParser.create_parser()
+        # Create parser and process arguments
+        parser = CommandParser()
         args = parser.parse_args()
         
-        if hasattr(args, 'func'):
-            args.func(args)
-        elif hasattr(args, 'interactive') and args.interactive:
-            InteractiveMode().run()
-        else:
-            parser.print_help()
+        # Validate and execute
+        if parser.validate_args(args):
+            result = parser.execute(args)
             
-    except KeyboardInterrupt:
-        print("\n\nOperation cancelled by user.")
+            # Print result summary
+            if result.get('success'):
+                print("🎉 Operation completed successfully!")
+                if result.get('message'):
+                    print(f"   {result['message']}")
+            else:
+                print("💥 Operation failed!")
+                if result.get('error'):
+                    print(f"   Error: {result['error']}")
+        else:
+            # Show help if validation fails
+            parser.parser.print_help()
+            
+    except ImportError as e:
+        print(f"❌ Import error: {e}")
+        print("Please check that all dependencies are installed")
         sys.exit(1)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Unexpected error: {e}")
         sys.exit(1)
 
 

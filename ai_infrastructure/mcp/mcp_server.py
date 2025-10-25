@@ -1,298 +1,376 @@
 """
-Enhanced Model Context Protocol (MCP) server using FastAPI.
-Exposes endpoints to list tools and run tools via HTTP POST with advanced features.
+Enhanced MCP Server implementation using FastAPI
+Provides a complete Model Context Protocol server with advanced features
 """
-import asyncio
-import importlib
-import traceback
-from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+import asyncio
+import inspect
+import json
+import uuid
+from typing import Any, Dict, List, Optional, Callable, Union, Awaitable
+from datetime import datetime
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
-import uvicorn
 
 from .tool_registry import ToolRegistry
+from .utils import (
+    validate_tool_definition,
+    safe_execute_tool,
+    format_tool_result,
+    create_error_response,
+    logger
+)
 
-# Security scheme
-security = HTTPBearer(auto_error=False)
 
-class RunRequest(BaseModel):
-    tool: str = Field(..., description="Name of the tool to execute")
-    args: Dict[str, Any] = Field(default={}, description="Tool arguments")
-    timeout_seconds: int = Field(default=30, ge=1, le=300, description="Execution timeout in seconds")
-    request_id: Optional[str] = Field(default=None, description="Optional request ID for tracking")
+# Pydantic Models for MCP Protocol
+class ToolDefinition(BaseModel):
+    """Tool definition schema"""
+    name: str = Field(..., description="Unique name of the tool")
+    description: str = Field(..., description="Detailed description of the tool")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Tool parameters schema")
+    returns: Dict[str, Any] = Field(default_factory=dict, description="Return value schema")
+    category: str = Field("general", description="Tool category for organization")
+    version: str = Field("1.0.0", description="Tool version")
+    deprecated: bool = Field(False, description="Whether the tool is deprecated")
 
-    @validator('args')
-    def validate_args(cls, v):
-        """Ensure args is a dictionary."""
-        if not isinstance(v, dict):
-            raise ValueError('args must be a dictionary')
-        return v
 
-class RunResponse(BaseModel):
-    ok: bool = Field(..., description="Whether the execution was successful")
-    result: Optional[Any] = Field(default=None, description="Tool execution result")
-    error: Optional[str] = Field(default=None, description="Error message if execution failed")
-    trace: Optional[str] = Field(default=None, description="Stack trace if execution failed")
-    request_id: Optional[str] = Field(default=None, description="Request ID for tracking")
-    execution_time: Optional[float] = Field(default=None, description="Execution time in seconds")
+class ToolCall(BaseModel):
+    """Tool call request schema"""
+    tool_name: str = Field(..., description="Name of the tool to call")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Tool parameters")
+    call_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique call identifier")
+    timeout: Optional[int] = Field(None, description="Execution timeout in seconds")
 
-class ToolInfo(BaseModel):
-    name: str = Field(..., description="Tool name")
-    description: str = Field(..., description="Tool description")
-    parameters: Dict[str, Any] = Field(..., description="Tool parameter schema")
-    is_async: bool = Field(..., description="Whether the tool supports async execution")
-    timeout: int = Field(..., description="Default timeout in seconds")
+
+class ToolResult(BaseModel):
+    """Tool execution result schema"""
+    call_id: str = Field(..., description="Unique call identifier")
+    tool_name: str = Field(..., description="Name of the executed tool")
+    result: Any = Field(..., description="Tool execution result")
+    success: bool = Field(..., description="Whether execution was successful")
+    error_message: Optional[str] = Field(None, description="Error message if failed")
+    execution_time: float = Field(..., description="Execution time in seconds")
+    timestamp: str = Field(..., description="Execution timestamp")
+
 
 class HealthResponse(BaseModel):
-    ok: bool = Field(..., description="Server health status")
-    tools_registered: List[str] = Field(..., description="List of registered tool names")
-    server_version: str = Field(..., description="Server version")
+    """Health check response schema"""
+    status: str = Field(..., description="Server status")
+    version: str = Field(..., description="Server version")
     uptime: float = Field(..., description="Server uptime in seconds")
+    tools_registered: int = Field(..., description="Number of registered tools")
+    active_connections: int = Field(..., description="Number of active connections")
 
-# Global variables
-registry: Optional[ToolRegistry] = None
-startup_time: float = 0
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    global registry, startup_time
-    import time
-    startup_time = time.time()
+class MCPServer:
+    """
+    Enhanced MCP Server with advanced features
+    """
     
-    # Initialize tool registry
-    registry = ToolRegistry()
-    
-    # Auto-discover and register tools
-    await registry.auto_discover_tools()
-    
-    yield  # Server runs here
-    
-    # Shutdown
-    if registry:
-        await registry.cleanup()
+    def __init__(
+        self,
+        name: str = "MCP Server",
+        version: str = "1.0.0",
+        description: str = "Enhanced MCP Server",
+        host: str = "0.0.0.0",
+        port: int = 8000,
+        enable_cors: bool = True,
+        max_workers: int = 10
+    ):
+        self.name = name
+        self.version = version
+        self.description = description
+        self.host = host
+        self.port = port
+        self.start_time = datetime.now()
+        self.active_connections = 0
+        self.max_workers = max_workers
+        
+        # Initialize tool registry
+        self.tool_registry = ToolRegistry()
+        
+        # Create FastAPI application
+        self.app = self._create_fastapi_app(enable_cors)
+        
+        # Setup routes
+        self._setup_routes()
+        
+        # Background tasks
+        self.background_tasks = set()
+        
+        logger.info(f"Initialized MCP Server: {name} v{version}")
 
-app = FastAPI(
-    title="MCP Server",
-    description="Model Context Protocol Server for tool execution",
-    version="1.0.0",
-    lifespan=lifespan
-)
+    def _create_fastapi_app(self, enable_cors: bool) -> FastAPI:
+        """Create and configure FastAPI application"""
+        
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            # Startup
+            logger.info(f"Starting {self.name} on {self.host}:{self.port}")
+            yield
+            # Shutdown
+            logger.info(f"Shutting down {self.name}")
+            # Cancel all background tasks
+            for task in self.background_tasks:
+                task.cancel()
+        
+        app = FastAPI(
+            title=self.name,
+            description=self.description,
+            version=self.version,
+            lifespan=lifespan
+        )
+        
+        if enable_cors:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        
+        return app
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    def _setup_routes(self):
+        """Setup all API routes"""
+        
+        @self.app.get("/", response_model=Dict[str, Any])
+        async def root():
+            """Root endpoint with server info"""
+            return {
+                "name": self.name,
+                "version": self.version,
+                "description": self.description,
+                "status": "running"
+            }
 
-# Dependency for authentication
-async def verify_auth(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
-    """Verify authentication token."""
-    # Implement your authentication logic here
-    # For now, this is a placeholder that allows all requests
-    if credentials:
-        # Validate token here
-        pass
-    return True
+        @self.app.get("/health", response_model=HealthResponse)
+        async def health_check():
+            """Health check endpoint"""
+            uptime = (datetime.now() - self.start_time).total_seconds()
+            return HealthResponse(
+                status="healthy",
+                version=self.version,
+                uptime=uptime,
+                tools_registered=len(self.tool_registry.list_tools()),
+                active_connections=self.active_connections
+            )
 
-# Dependency for tool registry
-async def get_registry():
-    if registry is None:
-        raise HTTPException(status_code=503, detail="Tool registry not initialized")
-    return registry
+        @self.app.get("/tools", response_model=List[ToolDefinition])
+        async def list_tools(category: Optional[str] = None):
+            """List all available tools, optionally filtered by category"""
+            tools = self.tool_registry.list_tools()
+            if category:
+                tools = [tool for tool in tools if tool.get("category") == category]
+            return tools
 
-@app.get("/healthz", response_model=HealthResponse)
-async def health():
-    """Health check endpoint with detailed server information."""
-    import time
-    tools = list(registry.list_tools().keys()) if registry else []
-    return {
-        "ok": True,
-        "tools_registered": tools,
-        "server_version": "1.0.0",
-        "uptime": time.time() - startup_time
-    }
+        @self.app.get("/tools/{tool_name}", response_model=ToolDefinition)
+        async def get_tool(tool_name: str):
+            """Get specific tool definition"""
+            tool = self.tool_registry.get_tool(tool_name)
+            if not tool:
+                raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+            return tool
 
-@app.get("/tools", response_model=Dict[str, ToolInfo])
-async def list_tools(
-    registry: ToolRegistry = Depends(get_registry),
-    auth: bool = Depends(verify_auth)
-):
-    """List all available tools with detailed information."""
-    tools = registry.list_tools()
-    tool_info = {}
-    
-    for name, tool in tools.items():
-        tool_info[name] = ToolInfo(
+        @self.app.post("/tools/call", response_model=ToolResult)
+        async def call_tool(tool_call: ToolCall, background_tasks: BackgroundTasks):
+            """Execute a tool with given parameters"""
+            self.active_connections += 1
+            try:
+                start_time = datetime.now()
+                
+                # Validate tool exists
+                if not self.tool_registry.tool_exists(tool_call.tool_name):
+                    raise HTTPException(
+                        status_code=404, 
+                        detail=f"Tool '{tool_call.tool_name}' not found"
+                    )
+                
+                # Execute tool
+                result = await self.tool_registry.execute_tool(
+                    tool_call.tool_name,
+                    tool_call.parameters,
+                    timeout=tool_call.timeout
+                )
+                
+                execution_time = (datetime.now() - start_time).total_seconds()
+                
+                return ToolResult(
+                    call_id=tool_call.call_id,
+                    tool_name=tool_call.tool_name,
+                    result=result,
+                    success=True,
+                    error_message=None,
+                    execution_time=execution_time,
+                    timestamp=datetime.now().isoformat()
+                )
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                execution_time = (datetime.now() - start_time).total_seconds()
+                error_msg = f"Tool execution failed: {str(e)}"
+                logger.error(error_msg)
+                
+                return ToolResult(
+                    call_id=tool_call.call_id,
+                    tool_name=tool_call.tool_name,
+                    result=None,
+                    success=False,
+                    error_message=error_msg,
+                    execution_time=execution_time,
+                    timestamp=datetime.now().isoformat()
+                )
+            finally:
+                self.active_connections -= 1
+
+        @self.app.post("/tools/batch", response_model=List[ToolResult])
+        async def batch_call_tools(tool_calls: List[ToolCall]):
+            """Execute multiple tools in batch"""
+            self.active_connections += 1
+            try:
+                results = []
+                for tool_call in tool_calls:
+                    try:
+                        # Execute each tool sequentially (can be enhanced for parallel execution)
+                        result = await self.tool_registry.execute_tool(
+                            tool_call.tool_name,
+                            tool_call.parameters,
+                            timeout=tool_call.timeout
+                        )
+                        
+                        results.append(ToolResult(
+                            call_id=tool_call.call_id,
+                            tool_name=tool_call.tool_name,
+                            result=result,
+                            success=True,
+                            error_message=None,
+                            execution_time=0.0,  # Would need individual timing
+                            timestamp=datetime.now().isoformat()
+                        ))
+                    except Exception as e:
+                        results.append(ToolResult(
+                            call_id=tool_call.call_id,
+                            tool_name=tool_call.tool_name,
+                            result=None,
+                            success=False,
+                            error_message=str(e),
+                            execution_time=0.0,
+                            timestamp=datetime.now().isoformat()
+                        ))
+                
+                return results
+            finally:
+                self.active_connections -= 1
+
+        @self.app.get("/metrics")
+        async def get_metrics():
+            """Get server metrics"""
+            uptime = (datetime.now() - self.start_time).total_seconds()
+            tools = self.tool_registry.list_tools()
+            
+            return {
+                "server": {
+                    "name": self.name,
+                    "version": self.version,
+                    "uptime_seconds": uptime,
+                    "active_connections": self.active_connections
+                },
+                "tools": {
+                    "total": len(tools),
+                    "by_category": self._get_tools_by_category(tools)
+                }
+            }
+
+    def _get_tools_by_category(self, tools: List[Dict]) -> Dict[str, int]:
+        """Count tools by category"""
+        categories = {}
+        for tool in tools:
+            category = tool.get("category", "uncategorized")
+            categories[category] = categories.get(category, 0) + 1
+        return categories
+
+    def register_tool(
+        self,
+        name: str,
+        function: Callable,
+        description: str = "",
+        parameters: Optional[Dict[str, Any]] = None,
+        returns: Optional[Dict[str, Any]] = None,
+        category: str = "general",
+        version: str = "1.0.0",
+        deprecated: bool = False
+    ) -> bool:
+        """Register a tool with the server"""
+        return self.tool_registry.register_tool(
             name=name,
-            description=tool.description,
-            parameters=tool.parameters_schema,
-            is_async=tool.is_async,
-            timeout=tool.timeout
-        )
-    
-    return tool_info
-
-@app.post("/run", response_model=RunResponse)
-async def run_tool(
-    req: RunRequest,
-    background_tasks: BackgroundTasks,
-    registry: ToolRegistry = Depends(get_registry),
-    auth: bool = Depends(verify_auth)
-):
-    """Execute a tool with the provided arguments."""
-    import time
-    
-    # Generate request ID if not provided
-    request_id = req.request_id or str(uuid4())
-    
-    # Validate tool exists
-    if req.tool not in registry.list_tools():
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Tool '{req.tool}' not found. Available tools: {list(registry.list_tools().keys())}"
-        )
-    
-    start_time = time.time()
-    
-    try:
-        tool = registry.get_tool(req.tool)
-        
-        # Validate arguments against tool schema
-        validation_error = tool.validate_arguments(req.args)
-        if validation_error:
-            raise HTTPException(status_code=400, detail=f"Invalid arguments: {validation_error}")
-        
-        # Execute tool with timeout
-        if tool.is_async:
-            result = await asyncio.wait_for(
-                tool.run(**req.args),
-                timeout=req.timeout_seconds
-            )
-        else:
-            # Run synchronous tools in thread pool
-            result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None, tool.run, **req.args
-                ),
-                timeout=req.timeout_seconds
-            )
-        
-        execution_time = time.time() - start_time
-        
-        return RunResponse(
-            ok=True,
-            result=result,
-            request_id=request_id,
-            execution_time=execution_time
-        )
-        
-    except asyncio.TimeoutError:
-        execution_time = time.time() - start_time
-        raise HTTPException(
-            status_code=408,
-            detail=f"Tool execution timed out after {req.timeout_seconds} seconds"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        execution_time = time.time() - start_time
-        tb = traceback.format_exc()
-        
-        # Log the error (in production, use proper logging)
-        print(f"Error executing tool {req.tool}: {str(e)}")
-        print(f"Traceback: {tb}")
-        
-        return RunResponse(
-            ok=False,
-            error=str(e),
-            trace=tb,
-            request_id=request_id,
-            execution_time=execution_time
+            function=function,
+            description=description,
+            parameters=parameters,
+            returns=returns,
+            category=category,
+            version=version,
+            deprecated=deprecated
         )
 
-@app.get("/tools/{tool_name}/schema")
-async def get_tool_schema(
-    tool_name: str,
-    registry: ToolRegistry = Depends(get_registry),
-    auth: bool = Depends(verify_auth)
-):
-    """Get the JSON schema for a specific tool's parameters."""
-    if tool_name not in registry.list_tools():
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
-    
-    tool = registry.get_tool(tool_name)
-    return {
-        "name": tool_name,
-        "description": tool.description,
-        "parameters": tool.parameters_schema,
-        "required": tool.required_parameters,
-        "is_async": tool.is_async,
-        "timeout": tool.timeout
-    }
+    def register_tools_from_module(self, module) -> int:
+        """Register all tools from a module that have @tool decorator"""
+        return self.tool_registry.register_tools_from_module(module)
 
-@app.post("/batch-run")
-async def batch_run_tools(
-    requests: List[RunRequest],
-    registry: ToolRegistry = Depends(get_registry),
-    auth: bool = Depends(verify_auth)
-):
-    """Execute multiple tools in batch."""
-    results = []
-    
-    for req in requests:
-        try:
-            # Use the existing run_tool logic for each request
-            response = await run_tool(req, BackgroundTasks(), registry, auth)
-            results.append(response.dict())
-        except HTTPException as e:
-            results.append(RunResponse(
-                ok=False,
-                error=e.detail,
-                request_id=req.request_id
-            ).dict())
-    
-    return {"results": results}
+    async def start(self):
+        """Start the MCP server"""
+        import uvicorn
+        
+        config = uvicorn.Config(
+            self.app,
+            host=self.host,
+            port=self.port,
+            log_level="info"
+        )
+        server = uvicorn.Server(config)
+        
+        logger.info(f"Starting {self.name} on {self.host}:{self.port}")
+        await server.serve()
 
-# Error handlers
-@app.exception_handler(500)
-async def internal_server_error_handler(request, exc):
-    """Handle internal server errors."""
-    return JSONResponse(
-        status_code=500,
-        content={
-            "ok": False,
-            "error": "Internal server error",
-            "request_id": getattr(request.state, 'request_id', 'unknown')
-        }
-    )
+    def get_app(self) -> FastAPI:
+        """Get the FastAPI application instance"""
+        return self.app
 
-# Background task for cleanup
-async def cleanup_old_requests():
-    """Background task to clean up old request data."""
-    # Implement cleanup logic here
-    pass
 
-if __name__ == "__main__":
-    # Configuration from environment variables
-    import os
-    
-    host = os.getenv("MCP_HOST", "0.0.0.0")
-    port = int(os.getenv("MCP_PORT", "8765"))
-    reload = os.getenv("MCP_RELOAD", "false").lower() == "true"
-    
-    uvicorn.run(
-        "mcp_server:app",
+# Global MCP Server instance
+_default_server: Optional[MCPServer] = None
+
+def create_mcp_server(
+    name: str = "MCP Server",
+    version: str = "1.0.0",
+    description: str = "Enhanced MCP Server",
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    enable_cors: bool = True
+) -> MCPServer:
+    """Create a global MCP server instance"""
+    global _default_server
+    _default_server = MCPServer(
+        name=name,
+        version=version,
+        description=description,
         host=host,
         port=port,
-        reload=reload,
-        log_level="info"
+        enable_cors=enable_cors
     )
+    return _default_server
+
+def get_mcp_server() -> MCPServer:
+    """Get the global MCP server instance"""
+    global _default_server
+    if _default_server is None:
+        _default_server = create_mcp_server()
+    return _default_server
+
+# FastAPI app instance for direct use
+mcp_app = get_mcp_server().get_app()

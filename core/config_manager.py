@@ -1,256 +1,280 @@
 """
-Configuration Manager
-Handles system configuration loading, validation, and management.
+Configuration management for AI File System.
 """
 
-import yaml
+import os
 import json
-from typing import Dict, Any, Optional, List
+import yaml
 from pathlib import Path
-import logging
-from datetime import datetime
-import jsonschema
-from jsonschema import validate
+from typing import Dict, Any, Optional
+from rich.console import Console
+from rich.panel import Panel
 
-logger = logging.getLogger(__name__)
 
 class ConfigManager:
-    """Manages system configuration with validation and versioning."""
+    """Manage application configuration with file system operations."""
     
-    def __init__(self, config_dir: str = "config"):
-        self.config_dir = Path(config_dir)
-        self.configs: Dict[str, Any] = {}
-        self.config_schemas: Dict[str, Any] = {}
-        self.config_versions: Dict[str, str] = {}
-        self._load_config_schemas()
-        self._load_all_configs()
+    _instance = None
+    _config = None
+    _config_paths = [
+        Path.home() / '.ai_file_system' / 'config.json',
+        Path.home() / '.ai_file_system' / 'config.yaml',
+        Path.home() / '.ai_file_system' / 'config.yml',
+        Path('config.json'),
+        Path('config.yaml'),
+        Path('config.yml'),
+    ]
     
-    def _load_config_schemas(self):
-        """Load JSON schemas for configuration validation."""
-        self.config_schemas = {
-            'system': {
-                "type": "object",
-                "properties": {
-                    "system_name": {"type": "string"},
-                    "version": {"type": "string"},
-                    "max_concurrent_operations": {"type": "integer", "minimum": 1},
-                    "log_level": {"type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
-                    "temp_directory": {"type": "string"},
-                    "backup_enabled": {"type": "boolean"}
-                },
-                "required": ["system_name", "version", "max_concurrent_operations"]
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ConfigManager, cls).__new__(cls)
+        return cls._instance
+    
+    @classmethod
+    def initialize(cls, config_path: Optional[Path] = None) -> bool:
+        """Initialize configuration manager."""
+        console = Console()
+        
+        try:
+            if config_path:
+                return cls._load_config_from_path(config_path)
+            
+            # Try to find and load configuration from standard paths
+            for path in cls._config_paths:
+                if path.exists():
+                    console.print(f"[green]Loading configuration from: {path}[/green]")
+                    return cls._load_config_from_path(path)
+            
+            # Create default configuration
+            console.print("[yellow]No configuration file found. Creating default configuration.[/yellow]")
+            cls._create_default_config()
+            return True
+            
+        except Exception as e:
+            console.print(f"[red]Error initializing configuration: {e}[/red]")
+            cls._create_default_config()
+            return False
+    
+    @classmethod
+    def _load_config_from_path(cls, config_path: Path) -> bool:
+        """Load configuration from a specific path."""
+        try:
+            if config_path.suffix.lower() in ['.yaml', '.yml']:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    cls._config = yaml.safe_load(f)
+            else:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    cls._config = json.load(f)
+            
+            # Ensure we have at least default structure
+            cls._ensure_default_structure()
+            return True
+            
+        except Exception as e:
+            console = Console()
+            console.print(f"[red]Error loading config from {config_path}: {e}[/red]")
+            cls._create_default_config()
+            return False
+    
+    @classmethod
+    def _create_default_config(cls):
+        """Create default configuration."""
+        cls._config = {
+            'ai': {
+                'provider': 'ollama',
+                'model': 'llama2',
+                'base_url': 'http://localhost:11434',
+                'timeout': 30,
+                'temperature': 0.7,
+                'max_tokens': 1000
             },
-            'paths': {
-                "type": "object", 
-                "properties": {
-                    "input_directory": {"type": "string"},
-                    "output_directory": {"type": "string"},
-                    "log_directory": {"type": "string"},
-                    "temp_directory": {"type": "string"},
-                    "backup_directory": {"type": "string"}
-                },
-                "required": ["input_directory", "output_directory", "log_directory"]
+            'file_operations': {
+                'default_input_dir': './input',
+                'default_output_dir': './output',
+                'backup_files': True,
+                'max_file_size_mb': 50,
+                'supported_formats': {
+                    'text': ['.txt', '.md', '.docx', '.pdf'],
+                    'code': ['.py', '.js', '.java', '.cpp', '.html', '.css'],
+                    'images': ['.jpg', '.png', '.gif', '.bmp']
+                }
             },
-            'tools': {
-                "type": "object",
-                "properties": {
-                    "ollama": {
-                        "type": "object",
-                        "properties": {
-                            "enabled": {"type": "boolean"},
-                            "default_model": {"type": "string"},
-                            "timeout": {"type": "integer", "minimum": 1},
-                            "max_tokens": {"type": "integer", "minimum": 1}
-                        },
-                        "required": ["enabled", "default_model"]
-                    },
-                    "file_operations": {
-                        "type": "object",
-                        "properties": {
-                            "max_file_size_mb": {"type": "integer", "minimum": 1},
-                            "allowed_extensions": {"type": "array", "items": {"type": "string"}},
-                            "backup_original": {"type": "boolean"}
-                        }
-                    }
-                },
-                "required": ["ollama", "file_operations"]
+            'conversion': {
+                'default_format': 'txt',
+                'preserve_structure': True,
+                'overwrite_existing': False
+            },
+            'enhancement': {
+                'default_type': 'grammar',
+                'create_backups': True,
+                'preview_changes': True
+            },
+            'logging': {
+                'level': 'INFO',
+                'file': 'ai_file_system.log',
+                'max_size_mb': 10
             }
         }
+        
+        # Save default config
+        cls._save_default_config()
     
-    def _load_all_configs(self):
-        """Load all configuration files from config directory."""
-        config_files = {
-            'system': 'system_config.yaml',
-            'paths': 'paths_config.yaml', 
-            'tools': 'tool_config.yaml',
-            'prompts': 'prompt_config.yaml'
+    @classmethod
+    def _save_default_config(cls):
+        """Save default configuration to file."""
+        config_dir = Path.home() / '.ai_file_system'
+        config_dir.mkdir(parents=True, exist_ok=True)
+        
+        config_file = config_dir / 'config.json'
+        try:
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(cls._config, f, indent=2, ensure_ascii=False)
+            
+            console = Console()
+            console.print(f"[green]Default configuration saved to: {config_file}[/green]")
+        except Exception as e:
+            console = Console()
+            console.print(f"[yellow]Could not save default config: {e}[/yellow]")
+    
+    @classmethod
+    def _ensure_default_structure(cls):
+        """Ensure the configuration has all required sections."""
+        default_structure = {
+            'ai': {
+                'provider': 'ollama',
+                'model': 'llama2',
+                'base_url': 'http://localhost:11434',
+                'timeout': 30
+            },
+            'file_operations': {
+                'default_input_dir': './input',
+                'default_output_dir': './output',
+                'backup_files': True
+            },
+            'conversion': {
+                'default_format': 'txt',
+                'preserve_structure': True
+            },
+            'enhancement': {
+                'default_type': 'grammar',
+                'create_backups': True
+            },
+            'logging': {
+                'level': 'INFO'
+            }
         }
         
-        for config_name, filename in config_files.items():
-            self.load_config(config_name, filename)
-    
-    def load_config(self, config_name: str, filename: str) -> bool:
-        """
-        Load a specific configuration file.
-        
-        Args:
-            config_name: Name for the configuration
-            filename: Configuration file name
-            
-        Returns:
-            Success status
-        """
-        config_path = self.config_dir / filename
-        
-        if not config_path.exists():
-            logger.warning(f"Config file not found: {config_path}")
-            return False
-        
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                if filename.endswith('.yaml') or filename.endswith('.yml'):
-                    config_data = yaml.safe_load(f)
-                else:
-                    config_data = json.load(f)
-            
-            # Validate configuration
-            if config_name in self.config_schemas:
-                try:
-                    validate(instance=config_data, schema=self.config_schemas[config_name])
-                except jsonschema.ValidationError as e:
-                    logger.error(f"Config validation failed for {config_name}: {e}")
-                    return False
-            
-            self.configs[config_name] = config_data
-            self.config_versions[config_name] = f"{datetime.now().timestamp()}"
-            
-            logger.info(f"Loaded configuration: {config_name} from {filename}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load config {config_name} from {filename}: {e}")
-            return False
-    
-    def get_config(self, config_name: str, default: Any = None) -> Any:
-        """Get configuration by name."""
-        return self.configs.get(config_name, default)
-    
-    def get_value(self, config_name: str, key: str, default: Any = None) -> Any:
-        """Get a specific value from configuration."""
-        config = self.get_config(config_name)
-        if config is None:
-            return default
-        
-        # Support nested keys with dot notation
-        keys = key.split('.')
-        current = config
-        
-        for k in keys:
-            if isinstance(current, dict) and k in current:
-                current = current[k]
+        # Merge with existing config, preserving user settings
+        for section, defaults in default_structure.items():
+            if section not in cls._config:
+                cls._config[section] = defaults
             else:
-                return default
-        
-        return current
+                for key, value in defaults.items():
+                    if key not in cls._config[section]:
+                        cls._config[section][key] = value
     
-    def update_config(self, config_name: str, updates: Dict[str, Any]) -> bool:
-        """
-        Update configuration values.
+    @classmethod
+    def get_config(cls, section: Optional[str] = None, key: Optional[str] = None) -> Any:
+        """Get configuration value."""
+        if cls._config is None:
+            cls.initialize()
         
-        Args:
-            config_name: Configuration to update
-            updates: Key-value pairs to update
-            
-        Returns:
-            Success status
-        """
-        if config_name not in self.configs:
-            logger.error(f"Configuration {config_name} not found")
-            return False
+        if section is None:
+            return cls._config
+        
+        if key is None:
+            return cls._config.get(section, {})
+        
+        return cls._config.get(section, {}).get(key)
+    
+    @classmethod
+    def set_config(cls, section: str, key: str, value: Any) -> bool:
+        """Set configuration value."""
+        if cls._config is None:
+            cls.initialize()
         
         try:
-            # Update configuration
-            for key, value in updates.items():
-                keys = key.split('.')
-                current = self.configs[config_name]
-                
-                # Navigate to the parent level
-                for k in keys[:-1]:
-                    if k not in current:
-                        current[k] = {}
-                    current = current[k]
-                
-                # Set the final value
-                current[keys[-1]] = value
+            if section not in cls._config:
+                cls._config[section] = {}
             
-            # Validate updated configuration
-            if config_name in self.config_schemas:
-                validate(instance=self.configs[config_name], schema=self.config_schemas[config_name])
-            
-            self.config_versions[config_name] = f"{datetime.now().timestamp()}"
-            logger.info(f"Updated configuration: {config_name}")
+            cls._config[section][key] = value
             return True
-            
-        except jsonschema.ValidationError as e:
-            logger.error(f"Config validation failed after update: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Failed to update config {config_name}: {e}")
+        except Exception:
             return False
     
-    def save_config(self, config_name: str, filename: str = None) -> bool:
-        """
-        Save configuration to file.
-        
-        Args:
-            config_name: Configuration to save
-            filename: Optional different filename
-            
-        Returns:
-            Success status
-        """
-        if config_name not in self.configs:
-            logger.error(f"Configuration {config_name} not found")
+    @classmethod
+    def save_config(cls, config_path: Optional[Path] = None) -> bool:
+        """Save configuration to file."""
+        if cls._config is None:
             return False
         
-        if filename is None:
-            # Determine filename based on config name
-            filename = f"{config_name}_config.yaml"
-        
-        config_path = self.config_dir / filename
-        
         try:
-            # Ensure directory exists
+            if config_path is None:
+                config_path = Path.home() / '.ai_file_system' / 'config.json'
+            
             config_path.parent.mkdir(parents=True, exist_ok=True)
             
-            with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.dump(self.configs[config_name], f, default_flow_style=False, indent=2)
+            if config_path.suffix.lower() in ['.yaml', '.yml']:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(cls._config, f, default_flow_style=False, allow_unicode=True)
+            else:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(cls._config, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"Saved configuration {config_name} to {filename}")
             return True
-            
         except Exception as e:
-            logger.error(f"Failed to save config {config_name}: {e}")
+            console = Console()
+            console.print(f"[red]Error saving configuration: {e}[/red]")
             return False
     
-    def list_configs(self) -> Dict[str, Any]:
-        """List all loaded configurations."""
-        return {
-            'configurations': list(self.configs.keys()),
-            'versions': self.config_versions,
-            'schemas_available': list(self.config_schemas.keys())
-        }
+    @classmethod
+    def show_config(cls):
+        """Display current configuration."""
+        if cls._config is None:
+            cls.initialize()
+        
+        console = Console()
+        
+        config_display = json.dumps(cls._config, indent=2, ensure_ascii=False)
+        console.print(Panel(config_display, title="Current Configuration", style="blue"))
     
-    def validate_config(self, config_name: str) -> Dict[str, Any]:
-        """Validate a configuration against its schema."""
-        if config_name not in self.configs:
-            return {'valid': False, 'error': f"Configuration {config_name} not found"}
+    @classmethod
+    def validate_ai_config(cls) -> bool:
+        """Validate AI configuration settings."""
+        ai_config = cls.get_config('ai')
         
-        if config_name not in self.config_schemas:
-            return {'valid': True, 'message': f"No schema defined for {config_name}"}
+        required_fields = ['provider', 'model', 'base_url']
+        for field in required_fields:
+            if not ai_config.get(field):
+                console = Console()
+                console.print(f"[red]Missing required AI configuration: {field}[/red]")
+                return False
         
-        try:
-            validate(instance=self.configs[config_name], schema=self.config_schemas[config_name])
-            return {'valid': True, 'message': f"Configuration {config_name} is valid"}
-        except jsonschema.ValidationError as e:
-            return {'valid': False, 'error': str(e)}
+        # Validate URL format
+        base_url = ai_config.get('base_url', '')
+        if not base_url.startswith(('http://', 'https://')):
+            console = Console()
+            console.print(f"[red]Invalid AI base URL: {base_url}[/red]")
+            return False
+        
+        return True
+    
+    @classmethod
+    def get_ai_config(cls) -> Dict[str, Any]:
+        """Get AI-specific configuration."""
+        return cls.get_config('ai')
+    
+    @classmethod
+    def get_file_operations_config(cls) -> Dict[str, Any]:
+        """Get file operations configuration."""
+        return cls.get_config('file_operations')
+    
+    @classmethod
+    def get_conversion_config(cls) -> Dict[str, Any]:
+        """Get conversion configuration."""
+        return cls.get_config('conversion')
+    
+    @classmethod
+    def get_enhancement_config(cls) -> Dict[str, Any]:
+        """Get enhancement configuration."""
+        return cls.get_config('enhancement')
