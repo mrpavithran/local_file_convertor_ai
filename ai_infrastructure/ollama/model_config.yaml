@@ -1,0 +1,20 @@
+default_model: mistral
+
+models:
+  mistral:
+    description: Mistral 7B model - balanced performance and speed
+    size: 4.1GB
+    context_window: 8192
+    recommended_temp: 0.7
+    use_cases:
+      - general
+      - reasoning
+      - coding
+      - creative_writing
+
+generation_settings:
+  timeout: 120
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 40
+  num_predict: 2048

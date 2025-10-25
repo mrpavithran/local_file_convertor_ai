@@ -1,0 +1,48 @@
+# Paths Configuration
+paths:
+  # Input/Output Directories
+  input:
+    default: "./input"
+    allowed_patterns:
+      - "**/*.pdf"
+      - "**/*.docx"
+      - "**/*.txt"
+      - "**/*.py"
+      - "**/*.js"
+      - "**/*.jpg"
+      - "**/*.png"
+      - "**/*.csv"
+      - "**/*.json"
+  
+  output:
+    default: "./output"
+    structures:
+      maintained: "maintained_structure"
+      flattened: "flattened_structure"
+    create_subdirectories: true
+  
+  # Working Directories
+  workspace:
+    root: "./workspace"
+    temp: "./workspace/temp"
+    cache: "./workspace/cache"
+    backups: "./workspace/backups"
+  
+  # Data Directories
+  data:
+    root: "./data"
+    processed: "./data/processed_files"
+    logs: "./data/logs"
+    chroma_db: "./data/chroma_db"
+  
+  # AI Infrastructure
+  ai_infrastructure:
+    models: "./ai_infrastructure/models"
+    embeddings: "./ai_infrastructure/embeddings"
+    vector_stores: "./ai_infrastructure/vector_stores"
+
+# Path Validation
+validation:
+  check_existence: true
+  create_missing: true
+  validate_permissions: true

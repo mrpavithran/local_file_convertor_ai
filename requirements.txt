@@ -1,0 +1,52 @@
+# AI File System - Python 3.11 Compatible Dependencies
+
+# Web Framework
+fastapi>=0.103.0
+uvicorn[standard]>=0.23.0
+
+# Image Processing
+pillow>=10.2.0
+pytesseract>=0.3.10
+
+# Document Processing
+python-docx>=1.0.0
+pypdf2>=3.0.1
+reportlab>=3.6.12
+
+# Data Processing
+numpy>=1.26.4
+pandas>=2.2.0
+openpyxl>=3.1.2
+
+# System Utilities
+psutil>=5.9.8
+requests>=2.31.0
+beautifulsoup4>=4.12.3
+
+# CLI & UI
+rich>=13.7.0
+questionary>=2.0.1
+typer>=0.9.0
+
+# Configuration
+pyyaml>=6.0.1
+pydantic>=2.4.2
+pydantic-settings>=2.0.3
+python-magic>=0.4.27
+filetype>=1.2.0
+
+# Async & HTTP
+aiofiles>=23.2.1
+httpx>=0.25.2
+
+# Development Tools
+pytest>=7.4.3
+pytest-asyncio>=0.21.1
+black>=23.11.0
+flake8>=6.1.0
+
+# Optional AI Packages (safe for 3.11, uncomment if needed)
+# chromadb>=0.4.24
+# sentence-transformers>=2.2.2
+# transformers>=4.36.0
+# torch>=2.1.0

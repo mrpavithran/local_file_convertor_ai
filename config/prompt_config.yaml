@@ -1,0 +1,45 @@
+# AI Prompt Configuration
+prompts:
+  # File Conversion Prompts
+  conversion:
+    document_to_text:
+      system: "You are an expert at extracting text from documents while preserving structure and meaning."
+      user: "Extract and format the text content from this document:\n\n{content}"
+    
+    code_conversion:
+      system: "You are an expert programmer skilled in multiple languages. Convert code while maintaining functionality."
+      user: "Convert this {source_lang} code to {target_lang}. Preserve all functionality:\n\n{code}"
+    
+    format_conversion:
+      system: "You are a format conversion expert. Convert between formats while preserving content and structure."
+      user: "Convert this content from {source_format} to {target_format}:\n\n{content}"
+
+  # File Enhancement Prompts
+  enhancement:
+    document_enhancement:
+      system: "You are a document enhancement expert. Improve clarity, structure, and readability."
+      user: "Enhance this document by improving formatting, structure, and clarity:\n\n{content}"
+    
+    code_enhancement:
+      system: "You are a code refactoring expert. Improve code structure, readability, and maintainability."
+      user: "Enhance this {language} code by improving structure, adding comments, and following best practices:\n\n{code}"
+    
+    image_description:
+      system: "You are an expert at describing images in detail."
+      user: "Provide a detailed description of this image:\n\n{image_info}"
+
+  # Analysis Prompts
+  analysis:
+    file_analysis:
+      system: "You are a file analysis expert. Provide insights about file content and structure."
+      user: "Analyze this {file_type} file and provide insights about its content and structure:\n\n{content}"
+    
+    content_summary:
+      system: "You are a summarization expert. Create concise and accurate summaries."
+      user: "Summarize this content in a clear and concise manner:\n\n{content}"
+
+# Prompt Settings
+settings:
+  max_tokens: 4000
+  temperature: 0.2
+  top_p: 0.9

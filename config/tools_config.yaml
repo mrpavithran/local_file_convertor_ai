@@ -1,0 +1,55 @@
+# Tool and Integration Configuration
+tools:
+  # AI Service Configurations
+  ai_services:
+    ollama:
+      enabled: true
+      base_url: "http://localhost:11434"
+      default_model: "mistral"
+      timeout: 30
+    
+    openai:
+      enabled: false
+      api_key_env: "OPENAI_API_KEY"
+      model: "gpt-4"
+      timeout: 30
+    
+    anthropic:
+      enabled: false
+      api_key_env: "ANTHROPIC_API_KEY"
+      model: "claude-3-sonnet"
+      timeout: 30
+
+  # File Processing Tools
+  file_tools:
+    encoding_detection:
+      enabled: true
+      fallback_encodings:
+        - "utf-8"
+        - "latin-1"
+        - "windows-1252"
+    
+    syntax_validation:
+      enabled: true
+      validate_before_processing: true
+      validate_after_processing: true
+
+  # MCP Tools Configuration
+  mcp_tools:
+    file_tools:
+      enabled: true
+      max_file_size: 100MB
+      allowed_extensions: [".txt", ".py", ".js", ".json", ".yaml", ".yml"]
+    
+    conversion_tools:
+      enabled: true
+      supported_conversions:
+        - "docx_to_pdf"
+        - "pdf_to_docx"
+        - "csv_to_xlsx"
+        - "xlsx_to_csv"
+    
+    image_tools:
+      enabled: true
+      max_image_size: 50MB
+      supported_formats: [".jpg", ".jpeg", ".png", ".gif", ".bmp"]
