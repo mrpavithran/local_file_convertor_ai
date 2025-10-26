@@ -1,0 +1,154 @@
+{
+  "timestamp": "1761463515.0996835",
+  "system_info": {
+    "python_version": "3.11.9",
+    "platform": "Windows-10-10.0.19045-SP0"
+  },
+  "checks": {
+    "System Requirements": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "python_version": "3.11.9",
+        "python_version_status": "OK",
+        "platform": "Windows-10-10.0.19045-SP0",
+        "system": "Windows",
+        "total_memory_gb": 7.9,
+        "available_memory_gb": 3.7,
+        "memory_status": "Sufficient",
+        "disk_free_gb": 403.5,
+        "disk_total_gb": 465.1,
+        "disk_status": "Sufficient"
+      }
+    },
+    "Directory Structure": {
+      "healthy": false,
+      "issues": [
+        "Missing 5 directories"
+      ],
+      "details": {
+        "existing_dirs": [
+          "ai_infrastructure",
+          "ai_infrastructure/ollama",
+          "ai_infrastructure/rag",
+          "ai_infrastructure/mcp",
+          "ai_infrastructure/mcp/tools",
+          "ai_infrastructure/mcp/tools/conversion_tools",
+          "ai_infrastructure/mcp/tools/file_tools",
+          "prompt_system",
+          "file_operations",
+          "core",
+          "core/utils",
+          "cli",
+          "cli/commands",
+          "data",
+          "data/logs",
+          "data/chroma_db",
+          "config",
+          "scripts",
+          "tests",
+          "docs"
+        ],
+        "missing_dirs": [
+          "data/processed_files",
+          "data/processed_files/maintained_structure",
+          "data/processed_files/flattened_structure",
+          "tests/test_data",
+          "examples"
+        ]
+      }
+    },
+    "Configuration Files": {
+      "healthy": false,
+      "issues": [
+        "Missing required config files: tool_config.yaml"
+      ],
+      "details": {
+        "system_config.yaml": "Valid",
+        "tool_config.yaml": "Missing",
+        "prompt_config.yaml": "Exists (optional)",
+        "paths_config.yaml": "Exists (optional)"
+      }
+    },
+    "Python Dependencies": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "pandas": "Available",
+        "openpyxl": "Available",
+        "python_docx": "Available",
+        "pypdf": "Available",
+        "reportlab": "Available",
+        "psutil": "Available",
+        "pdfminer": "Available (optional)",
+        "pillow": "Missing (optional)",
+        "requests": "Available (optional)",
+        "chromadb": "Available (optional)",
+        "sentence_transformers": "Available (optional)",
+        "fastapi": "Available (optional)",
+        "uvicorn": "Available (optional)",
+        "rich": "Available (optional)"
+      }
+    },
+    "AI Infrastructure": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "ollama": "Running",
+        "ollama_models": [
+          "mistral:latest"
+        ],
+        "chromadb": "Available (0 collections)"
+      }
+    },
+    "File Operations": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "file_creation": "Working",
+        "file_reading": "Working",
+        "file_operations": "All tests passed"
+      }
+    },
+    "CLI Functionality": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "main.py": "Exists",
+        "interactive_mode.py": "Exists",
+        "cli_import": "Working"
+      }
+    },
+    "RAG System": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "chromadb": "Available",
+        "sentence_transformers": "Available",
+        "rag_system": "Components available"
+      }
+    },
+    "MCP Tools": {
+      "healthy": true,
+      "issues": [],
+      "details": {
+        "tool_categories": 6,
+        "conversion_tools": [
+          "batch_converter.py",
+          "convert_csv_to_xlsx.py",
+          "convert_docx_to_pdf.py",
+          "convert_pdf_to_docx.py"
+        ],
+        "csv_tool": "Importable",
+        "docx_tool": "Importable",
+        "pdf_tool": "Importable"
+      }
+    }
+  },
+  "summary": {
+    "total_checks": 9,
+    "passed_checks": 7,
+    "failed_checks": 2,
+    "all_passed": false
+  }
+}

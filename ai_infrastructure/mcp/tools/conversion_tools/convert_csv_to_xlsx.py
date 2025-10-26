@@ -1,55 +1,56 @@
 """
 Enhanced CSV to XLSX converter with formatting options and validation.
-Dependencies: pandas, openpyxl
+FIXED VERSION - Functional with proper error handling and system integration
 """
+
 import os
-import pandas as pd
-from typing import Dict, Any, Optional
-from pathlib import Path
+import sys
 import logging
+from typing import Dict, Any, Optional, List
+from pathlib import Path
+from datetime import datetime
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 logger = logging.getLogger(__name__)
 
 class CSVToXLSXConverter:
     """A tool for converting CSV files to XLSX format with advanced options."""
     
-    name = "convert_csv_to_xlsx"
-    description = "Convert CSV files to Excel XLSX format with formatting options"
-    
     def __init__(self):
-        self.supported_encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        self.supported_encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'windows-1252']
     
-    def run(self, 
-            input_path: str, 
-            output_path: Optional[str] = None,
-            sheet_name: str = "Sheet1",
-            preserve_headers: bool = True,
-            auto_adjust_columns: bool = True,
-            encoding: str = "utf-8",
-            delimiter: str = ",",
-            na_values: Optional[list] = None) -> Dict[str, Any]:
+    def convert(self, 
+                input_path: str, 
+                output_path: Optional[str] = None,
+                sheet_name: str = "Data",
+                preserve_headers: bool = True,
+                auto_adjust_columns: bool = True,
+                encoding: str = "utf-8",
+                delimiter: str = ",") -> Dict[str, Any]:
         """
         Convert CSV file to XLSX format.
         
         Args:
             input_path: Path to the input CSV file
-            output_path: Path for the output XLSX file (optional, auto-generated if not provided)
+            output_path: Path for the output XLSX file (optional)
             sheet_name: Name of the Excel sheet
             preserve_headers: Whether to preserve CSV headers
             auto_adjust_columns: Whether to auto-adjust column widths in Excel
             encoding: File encoding for reading CSV
             delimiter: CSV delimiter character
-            na_values: List of strings to recognize as NA/NaN
             
         Returns:
             Dictionary with conversion results and metadata
         """
         # Validate input file
         if not os.path.exists(input_path):
-            raise FileNotFoundError(f"Input file not found: {input_path}")
-        
-        if not input_path.lower().endswith('.csv'):
-            logger.warning(f"Input file '{input_path}' does not have .csv extension")
+            return {
+                "success": False,
+                "error": f"Input file not found: {input_path}"
+            }
         
         # Generate output path if not provided
         if output_path is None:
@@ -65,50 +66,59 @@ class CSVToXLSXConverter:
             os.makedirs(output_dir, exist_ok=True)
             logger.info(f"Created output directory: {output_dir}")
         
-        # Read CSV file with error handling
-        df = self._read_csv_with_fallback(
-            input_path, 
-            encoding=encoding,
-            delimiter=delimiter,
-            na_values=na_values,
-            preserve_headers=preserve_headers
-        )
-        
-        if df.empty:
-            logger.warning(f"CSV file '{input_path}' is empty or contains no data")
-        
-        # Write to Excel
         try:
+            # Read CSV file with error handling
+            df = self._read_csv_with_fallback(
+                input_path, 
+                encoding=encoding,
+                delimiter=delimiter,
+                preserve_headers=preserve_headers
+            )
+            
+            if df.empty:
+                logger.warning(f"CSV file '{input_path}' is empty or contains no data")
+            
+            # Write to Excel
             self._write_to_excel(
                 df, 
                 output_path, 
                 sheet_name=sheet_name,
                 auto_adjust_columns=auto_adjust_columns
             )
+            
+            # Collect conversion statistics
+            stats = self._get_conversion_stats(df, input_path, output_path)
+            
+            logger.info(f"Successfully converted '{input_path}' to '{output_path}'")
+            return stats
+            
         except Exception as e:
             # Clean up partially written file if it exists
             if os.path.exists(output_path):
-                os.remove(output_path)
-            raise Exception(f"Failed to write Excel file: {str(e)}") from e
-        
-        # Collect conversion statistics
-        stats = self._get_conversion_stats(df, input_path, output_path)
-        
-        logger.info(f"Successfully converted '{input_path}' to '{output_path}'")
-        logger.info(f"Conversion stats: {stats}")
-        
-        return stats
+                try:
+                    os.remove(output_path)
+                except:
+                    pass
+            return {
+                "success": False,
+                "error": f"Conversion failed: {str(e)}"
+            }
     
     def _read_csv_with_fallback(self, 
                               input_path: str, 
                               encoding: str = "utf-8",
                               delimiter: str = ",",
-                              na_values: Optional[list] = None,
-                              preserve_headers: bool = True) -> pd.DataFrame:
+                              preserve_headers: bool = True) -> Any:
         """
         Read CSV file with encoding fallback and error handling.
         """
         headers = 0 if preserve_headers else None
+        
+        # Try to import pandas
+        try:
+            import pandas as pd
+        except ImportError:
+            raise ImportError("pandas is required for CSV reading. Install with: pip install pandas")
         
         # Try specified encoding first
         try:
@@ -116,15 +126,16 @@ class CSVToXLSXConverter:
                 input_path,
                 encoding=encoding,
                 delimiter=delimiter,
-                na_values=na_values,
-                keep_default_na=False,
                 header=headers,
-                dtype=str,
-                skip_blank_lines=False
+                skip_blank_lines=False,
+                on_bad_lines='skip'  # Skip problematic lines
             )
+            logger.info(f"Successfully read CSV with encoding: {encoding}")
             return df
         except UnicodeDecodeError:
             logger.warning(f"Encoding '{encoding}' failed for '{input_path}', trying fallback encodings")
+        except Exception as e:
+            logger.warning(f"CSV read failed with encoding {encoding}: {e}")
         
         # Try fallback encodings
         for fallback_encoding in self.supported_encodings:
@@ -135,15 +146,14 @@ class CSVToXLSXConverter:
                     input_path,
                     encoding=fallback_encoding,
                     delimiter=delimiter,
-                    na_values=na_values,
-                    keep_default_na=False,
                     header=headers,
-                    dtype=str,
-                    skip_blank_lines=False
+                    skip_blank_lines=False,
+                    on_bad_lines='skip'
                 )
                 logger.info(f"Successfully read '{input_path}' with encoding: {fallback_encoding}")
                 return df
-            except (UnicodeDecodeError, Exception):
+            except (UnicodeDecodeError, Exception) as e:
+                logger.debug(f"Encoding {fallback_encoding} failed: {e}")
                 continue
         
         # If all encodings fail, try without specifying encoding
@@ -151,11 +161,9 @@ class CSVToXLSXConverter:
             df = pd.read_csv(
                 input_path,
                 delimiter=delimiter,
-                na_values=na_values,
-                keep_default_na=False,
                 header=headers,
-                dtype=str,
                 skip_blank_lines=False,
+                on_bad_lines='skip',
                 encoding_errors='ignore'
             )
             logger.warning(f"Read '{input_path}' with encoding errors ignored")
@@ -164,14 +172,21 @@ class CSVToXLSXConverter:
             raise Exception(f"Failed to read CSV file '{input_path}': {str(e)}") from e
     
     def _write_to_excel(self, 
-                       df: pd.DataFrame, 
+                       df: Any, 
                        output_path: str, 
-                       sheet_name: str = "Sheet1",
+                       sheet_name: str = "Data",
                        auto_adjust_columns: bool = True):
         """
         Write DataFrame to Excel with formatting options.
         """
         try:
+            # Try to import openpyxl
+            try:
+                import openpyxl
+            except ImportError:
+                raise ImportError("openpyxl is required for Excel export. Install with: pip install openpyxl")
+            
+            # Write to Excel
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
                 df.to_excel(
                     writer, 
@@ -185,15 +200,10 @@ class CSVToXLSXConverter:
                     worksheet = writer.sheets[sheet_name]
                     self._auto_adjust_column_widths(worksheet, df)
                     
-        except ImportError:
-            raise ImportError(
-                "openpyxl is required for Excel export. "
-                "Install with: pip install openpyxl"
-            )
         except Exception as e:
             raise Exception(f"Excel writing failed: {str(e)}") from e
     
-    def _auto_adjust_column_widths(self, worksheet, df: pd.DataFrame):
+    def _auto_adjust_column_widths(self, worksheet, df: Any):
         """
         Auto-adjust column widths in Excel worksheet.
         """
@@ -201,10 +211,19 @@ class CSVToXLSXConverter:
             from openpyxl.utils import get_column_letter
             
             for idx, col in enumerate(df.columns, 1):
-                max_length = max(
-                    df[col].astype(str).str.len().max(),
-                    len(str(col))
-                )
+                # Handle both string and numeric column names
+                col_name = str(col)
+                max_length = 0
+                
+                # Check column name length
+                max_length = max(max_length, len(col_name))
+                
+                # Check data length in this column
+                if not df.empty:
+                    col_data_length = df[col].astype(str).str.len().max()
+                    max_length = max(max_length, col_data_length)
+                
+                # Set column width (add some padding)
                 adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
                 column_letter = get_column_letter(idx)
                 worksheet.column_dimensions[column_letter].width = adjusted_width
@@ -227,14 +246,17 @@ class CSVToXLSXConverter:
         
         return output_path
     
-    def _get_conversion_stats(self, df: pd.DataFrame, input_path: str, output_path: str) -> Dict[str, Any]:
+    def _get_conversion_stats(self, df: Any, input_path: str, output_path: str) -> Dict[str, Any]:
         """
         Generate conversion statistics.
         """
+        import pandas as pd
+        
         input_size = os.path.getsize(input_path)
         output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
         
         return {
+            "success": True,
             "output_path": os.path.abspath(output_path),
             "input_file": os.path.basename(input_path),
             "output_file": os.path.basename(output_path),
@@ -242,9 +264,19 @@ class CSVToXLSXConverter:
             "columns": len(df.columns) if not df.empty else 0,
             "input_size_bytes": input_size,
             "output_size_bytes": output_size,
+            "input_size_human": self._format_file_size(input_size),
+            "output_size_human": self._format_file_size(output_size),
             "size_change_percent": round(((output_size - input_size) / input_size) * 100, 2) if input_size > 0 else 0,
-            "conversion_success": True
+            "timestamp": datetime.now().isoformat()
         }
+    
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} TB"
     
     def batch_convert(self, 
                      input_directory: str, 
@@ -264,7 +296,10 @@ class CSVToXLSXConverter:
             Dictionary with batch conversion results
         """
         if not os.path.exists(input_directory):
-            raise FileNotFoundError(f"Input directory not found: {input_directory}")
+            return {
+                "success": False,
+                "error": f"Input directory not found: {input_directory}"
+            }
         
         output_directory = output_directory or input_directory
         
@@ -273,9 +308,13 @@ class CSVToXLSXConverter:
         csv_files = list(Path(input_directory).glob(pattern))
         
         if not csv_files:
-            raise FileNotFoundError(f"No CSV files found in: {input_directory}")
+            return {
+                "success": False,
+                "error": f"No CSV files found in: {input_directory}"
+            }
         
         results = {
+            "success": True,
             "total_files": len(csv_files),
             "successful_conversions": 0,
             "failed_conversions": 0,
@@ -291,18 +330,22 @@ class CSVToXLSXConverter:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 
                 # Convert file
-                result = self.run(
+                result = self.convert(
                     input_path=str(csv_file),
                     output_path=str(output_path),
                     **kwargs
                 )
                 
-                results["successful_conversions"] += 1
+                if result.get('success'):
+                    results["successful_conversions"] += 1
+                else:
+                    results["failed_conversions"] += 1
+                
                 results["conversions"].append({
                     "input_file": str(csv_file),
                     "output_file": str(output_path),
-                    "success": True,
-                    "stats": result
+                    "success": result.get('success', False),
+                    "result": result
                 })
                 
             except Exception as e:
@@ -317,7 +360,7 @@ class CSVToXLSXConverter:
         return results
 
 
-# Tool class for MCP compatibility
+# MCP Tool class
 class Tool:
     """MCP-compatible tool wrapper for CSV to XLSX conversion."""
     
@@ -330,7 +373,7 @@ class Tool:
     def run(self, 
             input_path: str, 
             output_path: str = None,
-            sheet_name: str = "Sheet1",
+            sheet_name: str = "Data",
             preserve_headers: bool = True,
             auto_adjust_columns: bool = True) -> Dict[str, Any]:
         """
@@ -346,7 +389,7 @@ class Tool:
         Returns:
             Dictionary with conversion results
         """
-        return self.converter.run(
+        return self.converter.convert(
             input_path=input_path,
             output_path=output_path,
             sheet_name=sheet_name,
@@ -369,16 +412,36 @@ def convert_csv_to_xlsx(input_path: str, output_path: str = None, **kwargs) -> D
         Dictionary with conversion results
     """
     converter = CSVToXLSXConverter()
-    return converter.run(input_path, output_path, **kwargs)
+    return converter.convert(input_path, output_path, **kwargs)
 
 
-# Example usage
-if __name__ == "__main__":
-    # Simple conversion
-    result = convert_csv_to_xlsx("data.csv", "data.xlsx")
-    print(f"Conversion result: {result}")
+# Test function
+def test_conversion():
+    """Test the CSV to XLSX conversion."""
+    # Create a test CSV file
+    test_csv = "test.csv"
+    test_data = """Name,Age,City
+John,25,New York
+Jane,30,Los Angeles
+Bob,35,Chicago"""
     
-    # Batch conversion
-    converter = CSVToXLSXConverter()
-    batch_result = converter.batch_convert("./csv_files", "./xlsx_files", recursive=True)
-    print(f"Batch conversion: {batch_result['successful_conversions']}/{batch_result['total_files']} successful")
+    try:
+        with open(test_csv, 'w', encoding='utf-8') as f:
+            f.write(test_data)
+        
+        result = convert_csv_to_xlsx(test_csv, "test_output.xlsx")
+        print("Test conversion result:", result)
+        
+        # Clean up
+        if os.path.exists(test_csv):
+            os.remove(test_csv)
+        if os.path.exists("test_output.xlsx"):
+            os.remove("test_output.xlsx")
+            
+    except Exception as e:
+        print(f"Test failed: {e}")
+
+
+if __name__ == "__main__":
+    # Run test
+    test_conversion()

@@ -1,176 +1,66 @@
 """
-Model Management Tool
-Handles Ollama model operations: availability checks, model pulling, and listing.
+Ollama Model Manager
+Handles model operations and provides direct access to model lists for the CLI.
 """
 
-import subprocess
-import time
-from typing import Dict, Any, List
+import requests
+import json
+from typing import List, Dict, Any
 
-class Tool:
-    name = 'model_manager'
-    description = 'Manage Ollama models: check availability, pull models, list models'
+class ModelManager:
+    def __init__(self, base_url: str = "http://127.0.0.1:11434"):
+        self.base_url = base_url
     
-    def __init__(self):
-        self._available = None
-    
-    def run(self, action: str = "check_availability", model: str = "mistral") -> Dict[str, Any]:
-        """
-        Perform model management operations.
-        
-        Args:
-            action: Operation to perform - 
-                   "check_availability", "pull_model", "list_models", "version"
-            model: Model name (for pull operations)
-            
-        Returns:
-            Operation results
-        """
-        if action == "check_availability":
-            return self._check_availability()
-        elif action == "pull_model":
-            return self._pull_model(model)
-        elif action == "list_models":
-            return self._list_models()
-        elif action == "version":
-            return self._get_version()
-        else:
-            return {"error": f"Unknown action: {action}"}
-    
-    def _check_availability(self) -> Dict[str, Any]:
-        """Check if Ollama is available and Mistral is installed."""
-        available = self.is_ollama_available()
-        result = {
-            "ollama_available": available,
-            "mistral_available": False,
-            "status": "not_available"
-        }
-        
-        if available:
-            try:
-                # Check version
-                version_result = self._get_version()
-                result.update(version_result)
-                
-                # Check if Mistral is installed
-                models_result = self._list_models()
-                if models_result.get("available", False):
-                    mistral_installed = any(
-                        "mistral" in model.get("name", "").lower() 
-                        for model in models_result.get("models", [])
-                    )
-                    result["mistral_available"] = mistral_installed
-                    result["status"] = "ready" if mistral_installed else "missing_mistral"
-                else:
-                    result["status"] = "cannot_list_models"
-                    
-            except Exception as e:
-                result["status"] = "error"
-                result["error"] = str(e)
-        else:
-            result["status"] = "ollama_not_found"
-            
-        return result
-    
-    def _pull_model(self, model: str) -> Dict[str, Any]:
-        """Pull a model from Ollama registry."""
-        if not self.is_ollama_available():
-            return {"success": False, "error": "Ollama not available"}
-        
+    def get_available_models(self) -> List[Dict[str, Any]]:
+        """Get list of available Ollama models via API"""
         try:
-            start_time = time.time()
-            
-            subprocess.run(["ollama", "pull", model], check=True, capture_output=True)
-            
-            pull_time = time.time() - start_time
-            
-            return {
-                "success": True,
-                "model": model,
-                "pull_time_seconds": round(pull_time, 2),
-                "message": f"Model '{model}' pulled successfully"
-            }
-        except subprocess.CalledProcessError as e:
-            return {
-                "success": False,
-                "error": f"Failed to pull {model}: {e}",
-                "model": model
-            }
+            response = requests.get(f"{self.base_url}/api/tags", timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('models', [])
+            else:
+                print(f"❌ API error: {response.status_code}")
+                return []
+        except requests.exceptions.ConnectionError:
+            print("❌ Cannot connect to Ollama. Make sure 'ollama serve' is running.")
+            return []
+        except Exception as e:
+            print(f"❌ Error fetching models: {e}")
+            return []
     
-    def _list_models(self) -> Dict[str, Any]:
-        """List available Ollama models."""
-        if not self.is_ollama_available():
-            return {"available": False, "models": []}
-        
+    def is_model_loaded(self, model_name: str) -> bool:
+        """Check if a specific model is loaded"""
+        models = self.get_available_models()
+        return any(model['name'] == model_name for model in models)
+    
+    def get_model_info(self, model_name: str) -> Dict[str, Any]:
+        """Get detailed information about a specific model"""
         try:
-            result = subprocess.run(
-                ["ollama", "list"], 
-                capture_output=True, 
-                text=True, 
-                check=True
+            response = requests.post(
+                f"{self.base_url}/api/show",
+                json={"name": model_name},
+                timeout=10
             )
-            
-            lines = result.stdout.strip().split('\n')
-            models = []
-            
-            # Parse model list (skip header line)
-            for line in lines[1:]:
-                if line.strip():
-                    parts = line.split()
-                    if len(parts) >= 3:
-                        model_info = {
-                            "name": parts[0],
-                            "size": parts[1],
-                            "modified": ' '.join(parts[2:4]) if len(parts) > 3 else parts[2]
-                        }
-                        if len(parts) > 4:
-                            model_info["digest"] = parts[4]
-                        models.append(model_info)
-            
-            return {
-                "available": True,
-                "models": models,
-                "count": len(models)
-            }
-        except subprocess.CalledProcessError as e:
-            return {
-                "available": False,
-                "error": f"Failed to list models: {e}",
-                "models": []
-            }
+            if response.status_code == 200:
+                return response.json()
+            return {}
+        except Exception as e:
+            print(f"❌ Error getting model info: {e}")
+            return {}
     
-    def _get_version(self) -> Dict[str, Any]:
-        """Get Ollama version information."""
+    def check_ollama_status(self) -> Dict[str, Any]:
+        """Check if Ollama is running and accessible"""
         try:
-            result = subprocess.run(
-                ["ollama", "--version"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             return {
-                "version_available": True,
-                "version": result.stdout.strip()
+                "status": "running",
+                "models_count": len(response.json().get('models', [])),
+                "version": "unknown"  # Ollama API doesn't expose version directly
             }
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return {"version_available": False}
-    
-    def is_ollama_available(self) -> bool:
-        """Check if Ollama CLI is available in PATH."""
-        if self._available is None:
-            try:
-                subprocess.run(
-                    ["ollama", "--version"], 
-                    capture_output=True, 
-                    check=True
-                )
-                self._available = True
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                self._available = False
-        return self._available
+        except requests.exceptions.ConnectionError:
+            return {"status": "not_running", "error": "Cannot connect to Ollama"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
-# Module-level function for direct access
-def check_ollama_availability() -> Dict[str, Any]:
-    """Quick check if Ollama is available."""
-    tool = Tool()
-    return tool._check_availability()
+# Global instance for easy access
+model_manager = ModelManager()

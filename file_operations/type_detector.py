@@ -1,240 +1,217 @@
 """
-Advanced file type detection using multiple methods.
+Enhanced File Type Detector with Conversion Support
 """
 
 import os
-import magic
+import mimetypes
 from pathlib import Path
-from typing import Dict, List, Optional
-import filetype
+from typing import Dict, List, Optional, Tuple
+import magic  # python-magic-bin for Windows, python-magic for Linux
 
-
-class TypeDetector:
-    """Detect file types using extension, magic numbers, and content analysis."""
+class FileTypeDetector:
+    """
+    Detect file types and determine conversion capabilities
+    """
     
     def __init__(self):
-        self.mime_detector = magic.Magic(mime=True)
-        
-        # Extended file type mappings
-        self.type_categories = {
-            'documents': {
-                'extensions': ['.pdf', '.docx', '.doc', '.txt', '.rtf', '.odt', '.md'],
-                'mime_prefixes': ['application/pdf', 'application/msword', 'application/vnd.openxmlformats', 'text/']
-            },
-            'spreadsheets': {
-                'extensions': ['.xlsx', '.xls', '.csv', '.ods'],
-                'mime_prefixes': ['application/vnd.ms-excel', 'application/vnd.openxmlformats', 'text/csv']
-            },
-            'presentations': {
-                'extensions': ['.pptx', '.ppt', '.odp'],
-                'mime_prefixes': ['application/vnd.ms-powerpoint', 'application/vnd.openxmlformats']
-            },
-            'images': {
-                'extensions': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.svg'],
-                'mime_prefixes': ['image/']
-            },
-            'audio': {
-                'extensions': ['.mp3', '.wav', '.flac', '.aac', '.ogg'],
-                'mime_prefixes': ['audio/']
-            },
-            'video': {
-                'extensions': ['.mp4', '.avi', '.mov', '.mkv', '.wmv'],
-                'mime_prefixes': ['video/']
-            },
-            'archives': {
-                'extensions': ['.zip', '.rar', '.7z', '.tar', '.gz'],
-                'mime_prefixes': ['application/zip', 'application/x-rar', 'application/x-7z']
-            },
-            'code': {
-                'extensions': ['.py', '.js', '.java', '.cpp', '.c', '.html', '.css', '.php', '.rb', '.go', '.rs'],
-                'mime_prefixes': ['text/', 'application/javascript']
-            },
-            'executables': {
-                'extensions': ['.exe', '.bin', '.sh', '.bat'],
-                'mime_prefixes': ['application/x-executable', 'application/x-shellscript']
-            }
-        }
-    
-    def detect_file_type(self, file_path: Path) -> str:
-        """
-        Detect file type using multiple methods.
-        
-        Args:
-            file_path: Path to the file
+        self.supported_conversions = {
+            # Document conversions
+            'pdf': {'docx', 'txt'},
+            'docx': {'pdf', 'txt'}, 
+            'doc': {'pdf', 'docx', 'txt'},
+            'txt': {'pdf', 'docx'},
+            'csv': {'xlsx', 'json'},
+            'xlsx': {'csv', 'pdf'},
             
-        Returns:
-            Detected file type
-        """
-        # Method 1: Extension-based detection
-        extension_type = self._detect_by_extension(file_path)
-        
-        # Method 2: Magic number detection
-        magic_type = self._detect_by_magic(file_path)
-        
-        # Method 3: Content-based detection
-        content_type = self._detect_by_content(file_path)
-        
-        # Prioritize magic number detection as most accurate
-        if magic_type and magic_type != 'unknown':
-            return magic_type
-        elif content_type and content_type != 'unknown':
-            return content_type
-        else:
-            return extension_type or 'unknown'
-    
-    def categorize_file(self, file_path: Path) -> str:
-        """
-        Categorize file into broad categories.
-        
-        Args:
-            file_path: Path to the file
+            # Image conversions
+            'jpg': {'png', 'webp', 'pdf'},
+            'jpeg': {'png', 'webp', 'pdf'},
+            'png': {'jpg', 'webp', 'pdf'},
+            'gif': {'png', 'jpg', 'pdf'},
+            'webp': {'png', 'jpg', 'pdf'},
             
-        Returns:
-            File category
-        """
-        file_type = self.detect_file_type(file_path)
-        extension = file_path.suffix.lower()
-        
-        for category, info in self.type_categories.items():
-            if (extension in info['extensions'] or 
-                any(file_type.startswith(prefix) for prefix in info['mime_prefixes'])):
-                return category
-        
-        return 'other'
-    
-    def get_mime_type(self, file_path: Path) -> str:
-        """
-        Get MIME type of file.
-        
-        Args:
-            file_path: Path to the file
-            
-        Returns:
-            MIME type string
-        """
-        try:
-            return self.mime_detector.from_file(str(file_path))
-        except:
-            return 'application/octet-stream'
-    
-    def is_text_file(self, file_path: Path) -> bool:
-        """
-        Check if file is a text file.
-        
-        Args:
-            file_path: Path to the file
-            
-        Returns:
-            True if text file
-        """
-        mime_type = self.get_mime_type(file_path)
-        return mime_type.startswith('text/') or mime_type in [
-            'application/javascript',
-            'application/json',
-            'application/xml'
-        ]
-    
-    def is_binary_file(self, file_path: Path) -> bool:
-        """
-        Check if file is a binary file.
-        
-        Args:
-            file_path: Path to the file
-            
-        Returns:
-            True if binary file
-        """
-        return not self.is_text_file(file_path)
-    
-    def _detect_by_extension(self, file_path: Path) -> Optional[str]:
-        """Detect file type by extension."""
-        extension_map = {
-            '.pdf': 'document',
-            '.docx': 'document',
-            '.doc': 'document',
-            '.txt': 'text',
-            '.py': 'code',
-            '.js': 'code',
-            '.java': 'code',
-            '.html': 'code',
-            '.css': 'code',
-            '.jpg': 'image',
-            '.jpeg': 'image',
-            '.png': 'image',
-            '.gif': 'image',
-            '.mp4': 'video',
-            '.mp3': 'audio',
-            '.zip': 'archive',
-            '.xlsx': 'spreadsheet',
-            '.csv': 'spreadsheet',
-            '.pptx': 'presentation'
+            # Text formats
+            'json': {'csv', 'yaml', 'xml'},
+            'yaml': {'json', 'xml'},
+            'xml': {'json', 'yaml'}
         }
         
-        return extension_map.get(file_path.suffix.lower())
-    
-    def _detect_by_magic(self, file_path: Path) -> Optional[str]:
-        """Detect file type using magic numbers."""
+        # Initialize magic
         try:
-            mime_type = self.get_mime_type(file_path)
-            
-            # Map MIME types to our categories
-            mime_map = {
-                'application/pdf': 'document',
-                'application/msword': 'document',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
-                'text/plain': 'text',
-                'text/html': 'code',
-                'application/javascript': 'code',
-                'text/x-python': 'code',
-                'image/jpeg': 'image',
-                'image/png': 'image',
-                'image/gif': 'image',
-                'video/mp4': 'video',
-                'audio/mpeg': 'audio',
-                'application/zip': 'archive',
-                'application/vnd.ms-excel': 'spreadsheet',
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'spreadsheet',
-                'text/csv': 'spreadsheet'
-            }
-            
-            return mime_map.get(mime_type, 'unknown')
-            
+            self.magic = magic.Magic(mime=True)
         except:
-            return 'unknown'
+            self.magic = None
     
-    def _detect_by_content(self, file_path: Path) -> Optional[str]:
-        """Detect file type by analyzing content."""
-        try:
-            # For small files, read and analyze content
-            if file_path.stat().st_size > 1024 * 1024:  # 1MB limit
-                return 'unknown'
-            
-            with open(file_path, 'rb') as f:
-                header = f.read(512)  # Read first 512 bytes
-            
-            # Check for common file signatures
-            signatures = {
-                b'%PDF': 'document',
-                b'PK\x03\x04': 'archive',  # ZIP
-                b'\x89PNG': 'image',
-                b'\xff\xd8\xff': 'image',  # JPEG
-                b'GIF8': 'image',
-                b'<!DOCTYPE': 'code',
-                b'<?php': 'code',
-                b'#!/': 'code'  # Script
-            }
-            
-            for signature, file_type in signatures.items():
-                if header.startswith(signature):
-                    return file_type
-            
-            # Check if it's text
+    def detect_file_type(self, file_path: str) -> Dict[str, str]:
+        """
+        Detect file type using multiple methods
+        """
+        if not os.path.exists(file_path):
+            return {"error": "File not found"}
+        
+        result = {
+            'path': file_path,
+            'filename': os.path.basename(file_path),
+            'size': os.path.getsize(file_path)
+        }
+        
+        # Method 1: File extension
+        ext = Path(file_path).suffix.lower().lstrip('.')
+        result['extension'] = ext
+        
+        # Method 2: MIME type
+        mime_type, _ = mimetypes.guess_type(file_path)
+        result['mime_type'] = mime_type or 'unknown'
+        
+        # Method 3: Magic (if available)
+        if self.magic:
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    f.read(1024)
-                return 'text'
+                magic_result = self.magic.from_file(file_path)
+                result['magic_type'] = magic_result
             except:
-                return 'binary'
+                result['magic_type'] = 'unknown'
+        
+        # Determine category
+        result['category'] = self._categorize_file(ext, mime_type)
+        
+        # Get available conversions
+        result['convertible_to'] = self.get_available_conversions(ext)
+        
+        return result
+    
+    def _categorize_file(self, extension: str, mime_type: str) -> str:
+        """Categorize file into broad categories"""
+        document_extensions = {'pdf', 'docx', 'doc', 'txt', 'rtf', 'odt'}
+        spreadsheet_extensions = {'csv', 'xlsx', 'xls', 'ods'}
+        image_extensions = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff'}
+        presentation_extensions = {'pptx', 'ppt', 'odp'}
+        
+        if extension in document_extensions:
+            return 'document'
+        elif extension in spreadsheet_extensions:
+            return 'spreadsheet'
+        elif extension in image_extensions:
+            return 'image'
+        elif extension in presentation_extensions:
+            return 'presentation'
+        elif extension in {'json', 'yaml', 'xml'}:
+            return 'data'
+        else:
+            return 'other'
+    
+    def get_available_conversions(self, from_extension: str) -> List[str]:
+        """Get list of available conversion targets for a file type"""
+        return list(self.supported_conversions.get(from_extension, set()))
+    
+    def can_convert(self, from_extension: str, to_extension: str) -> bool:
+        """Check if conversion between two formats is supported"""
+        return to_extension in self.supported_conversions.get(from_extension, set())
+    
+    def scan_directory(self, directory: str, recursive: bool = False) -> Dict[str, List]:
+        """
+        Scan directory for convertible files
+        """
+        if not os.path.exists(directory):
+            return {"error": f"Directory not found: {directory}"}
+        
+        convertible_files = []
+        other_files = []
+        
+        if recursive:
+            walk_generator = os.walk(directory)
+        else:
+            # Simulate non-recursive walk
+            try:
+                items = os.listdir(directory)
+                walk_generator = [(directory, [], items)]
+            except PermissionError:
+                return {"error": f"Permission denied: {directory}"}
+        
+        for root, dirs, files in walk_generator:
+            for file in files:
+                file_path = os.path.join(root, file)
                 
-        except:
-            return 'unknown'
+                try:
+                    file_info = self.detect_file_type(file_path)
+                    
+                    if file_info.get('convertible_to'):
+                        convertible_files.append(file_info)
+                    else:
+                        other_files.append(file_info)
+                        
+                except (OSError, PermissionError):
+                    # Skip files that can't be accessed
+                    continue
+        
+        return {
+            'directory': directory,
+            'convertible_files': convertible_files,
+            'other_files': other_files,
+            'total_convertible': len(convertible_files),
+            'total_files': len(convertible_files) + len(other_files)
+        }
+    
+    def get_conversion_suggestions(self, file_path: str) -> List[Dict]:
+        """
+        Get suggested conversions for a file
+        """
+        file_info = self.detect_file_type(file_path)
+        suggestions = []
+        
+        for target_format in file_info.get('convertible_to', []):
+            suggestion = {
+                'from_format': file_info['extension'],
+                'to_format': target_format,
+                'description': self._get_conversion_description(file_info['extension'], target_format),
+                'complexity': self._get_conversion_complexity(file_info['extension'], target_format)
+            }
+            suggestions.append(suggestion)
+        
+        return suggestions
+    
+    def _get_conversion_description(self, from_format: str, to_format: str) -> str:
+        """Get human-readable conversion description"""
+        descriptions = {
+            ('pdf', 'docx'): "Extract text from PDF to editable DOCX",
+            ('docx', 'pdf'): "Convert DOCX document to PDF format",
+            ('csv', 'xlsx'): "Convert CSV data to Excel format",
+            ('jpg', 'png'): "Convert JPEG image to PNG format",
+            ('png', 'jpg'): "Convert PNG image to JPEG format"
+        }
+        
+        return descriptions.get((from_format, to_format), f"Convert {from_format.upper()} to {to_format.upper()}")
+    
+    def _get_conversion_complexity(self, from_format: str, to_format: str) -> str:
+        """Estimate conversion complexity"""
+        simple_conversions = {('csv', 'xlsx'), ('txt', 'pdf')}
+        complex_conversions = {('pdf', 'docx'), ('docx', 'pdf')}
+        
+        if (from_format, to_format) in simple_conversions:
+            return "simple"
+        elif (from_format, to_format) in complex_conversions:
+            return "complex"
+        else:
+            return "medium"
+
+
+# Utility functions
+def format_file_size(size_bytes: int) -> str:
+    """Format file size in human-readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} TB"
+
+
+def get_file_category_icon(category: str) -> str:
+    """Get emoji icon for file category"""
+    icons = {
+        'document': '📄',
+        'spreadsheet': '📊', 
+        'image': '🖼️',
+        'presentation': '📽️',
+        'data': '📁',
+        'other': '📎'
+    }
+    return icons.get(category, '📎')

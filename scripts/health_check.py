@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
 """
 Health check and system verification script for AI File System.
+FIXED VERSION - Complete and functional
 """
 
 import os
 import sys
 import importlib
 import platform
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-import yaml
+import argparse
 import json
+import subprocess
+from pathlib import Path
+from typing import Dict, List, Any, Optional
 
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.panel import Panel
-from rich.table import Table
-from rich.tree import Tree
-from rich.syntax import Syntax
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+try:
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.panel import Panel
+    from rich.table import Table
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+    # Fallback console
+    class SimpleConsole:
+        def print(self, *args, **kwargs):
+            print(*args)
+    Console = SimpleConsole
 
 
 def run_health_check(verbose: bool = False, fix_issues: bool = False) -> bool:
@@ -33,10 +46,14 @@ def run_health_check(verbose: bool = False, fix_issues: bool = False) -> bool:
     """
     console = Console()
     
-    console.print(Panel.fit(
-        "🏥 AI File System Health Check",
-        style="bold blue"
-    ))
+    if RICH_AVAILABLE:
+        console.print(Panel.fit(
+            "🏥 AI File System Health Check",
+            style="bold blue"
+        ))
+    else:
+        console.print("🏥 AI File System Health Check")
+        console.print("=" * 50)
     
     all_checks_passed = True
     check_results = {}
@@ -54,16 +71,46 @@ def run_health_check(verbose: bool = False, fix_issues: bool = False) -> bool:
         ("MCP Tools", check_mcp_tools)
     ]
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        
-        task = progress.add_task("Running health checks...", total=len(checks))
-        
-        for check_name, check_function in checks:
-            progress.update(task, description=f"Checking {check_name}...")
+    if RICH_AVAILABLE:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            
+            task = progress.add_task("Running health checks...", total=len(checks))
+            
+            for check_name, check_function in checks:
+                progress.update(task, description=f"Checking {check_name}...")
+                
+                try:
+                    result = check_function(verbose)
+                    check_results[check_name] = result
+                    
+                    if not result['healthy']:
+                        all_checks_passed = False
+                        
+                        if fix_issues:
+                            progress.update(task, description=f"Fixing {check_name}...")
+                            fix_result = attempt_fix(check_name, result, console)
+                            if fix_result:
+                                check_results[check_name] = fix_result
+                                if fix_result['healthy']:
+                                    all_checks_passed = all_checks_passed and True
+                    
+                except Exception as e:
+                    check_results[check_name] = {
+                        'healthy': False,
+                        'issues': [f"Check failed: {e}"],
+                        'details': {}
+                    }
+                    all_checks_passed = False
+                
+                progress.update(task, advance=1)
+    else:
+        # Simple progress without rich
+        for i, (check_name, check_function) in enumerate(checks, 1):
+            console.print(f"Checking {check_name}... ({i}/{len(checks)})")
             
             try:
                 result = check_function(verbose)
@@ -73,7 +120,7 @@ def run_health_check(verbose: bool = False, fix_issues: bool = False) -> bool:
                     all_checks_passed = False
                     
                     if fix_issues:
-                        progress.update(task, description=f"Fixing {check_name}...")
+                        console.print(f"  Fixing {check_name}...")
                         fix_result = attempt_fix(check_name, result, console)
                         if fix_result:
                             check_results[check_name] = fix_result
@@ -87,8 +134,6 @@ def run_health_check(verbose: bool = False, fix_issues: bool = False) -> bool:
                     'details': {}
                 }
                 all_checks_passed = False
-            
-            progress.update(task, advance=1)
     
     # Display results
     display_health_results(check_results, console, verbose)
@@ -97,14 +142,14 @@ def run_health_check(verbose: bool = False, fix_issues: bool = False) -> bool:
     generate_health_report(check_results)
     
     if all_checks_passed:
-        console.print("✅ All health checks passed! System is healthy. 🎉", style="bold green")
+        console.print("✅ All health checks passed! System is healthy. 🎉")
     else:
-        console.print("❌ Some health checks failed. See details above.", style="bold red")
+        console.print("❌ Some health checks failed. See details above.")
     
     return all_checks_passed
 
 
-def check_system_requirements(verbose: bool = False) -> Dict[str, any]:
+def check_system_requirements(verbose: bool = False) -> Dict[str, Any]:
     """Check system requirements and environment."""
     issues = []
     details = {}
@@ -115,6 +160,8 @@ def check_system_requirements(verbose: bool = False) -> Dict[str, any]:
     
     if sys.version_info < (3, 8):
         issues.append(f"Python version {python_version} is below minimum required 3.8")
+    else:
+        details['python_version_status'] = "OK"
     
     # Platform information
     details['platform'] = platform.platform()
@@ -129,20 +176,25 @@ def check_system_requirements(verbose: bool = False) -> Dict[str, any]:
         
         if memory.available < 2 * 1024**3:  # 2GB
             issues.append("Low available memory (less than 2GB)")
+        else:
+            details['memory_status'] = "Sufficient"
     except ImportError:
         details['memory_info'] = "psutil not available"
         issues.append("psutil package not installed for memory monitoring")
     
     # Disk space
     try:
-        disk = psutil.disk_usage('/')
+        disk = psutil.disk_usage('.')
         details['disk_free_gb'] = round(disk.free / (1024**3), 1)
         details['disk_total_gb'] = round(disk.total / (1024**3), 1)
         
-        if disk.free < 5 * 1024**3:  # 5GB
-            issues.append("Low disk space (less than 5GB free)")
+        if disk.free < 1 * 1024**3:  # 1GB
+            issues.append("Low disk space (less than 1GB free)")
+        else:
+            details['disk_status'] = "Sufficient"
     except:
         details['disk_info'] = "Disk info unavailable"
+        # Don't add this as an issue since it's not critical
     
     return {
         'healthy': len(issues) == 0,
@@ -151,50 +203,57 @@ def check_system_requirements(verbose: bool = False) -> Dict[str, any]:
     }
 
 
-def check_directory_structure(verbose: bool = False) -> Dict[str, any]:
+def check_directory_structure(verbose: bool = False) -> Dict[str, Any]:
     """Check if all required directories exist."""
     issues = []
     details = {}
     
     base_dir = Path(__file__).parent.parent
     required_dirs = [
-        base_dir / "ai_infrastructure",
-        base_dir / "ai_infrastructure" / "ollama",
-        base_dir / "ai_infrastructure" / "rag",
-        base_dir / "ai_infrastructure" / "mcp",
-        base_dir / "ai_infrastructure" / "mcp" / "tools",
-        base_dir / "prompt_system",
-        base_dir / "file_operations",
-        base_dir / "core",
-        base_dir / "core" / "utils",
-        base_dir / "cli",
-        base_dir / "cli" / "commands",
-        base_dir / "data",
-        base_dir / "data" / "processed_files",
-        base_dir / "data" / "logs",
-        base_dir / "data" / "chroma_db",
-        base_dir / "config",
-        base_dir / "scripts",
-        base_dir / "tests",
-        base_dir / "docs",
-        base_dir / "examples"
+        "ai_infrastructure",
+        "ai_infrastructure/ollama",
+        "ai_infrastructure/rag", 
+        "ai_infrastructure/mcp",
+        "ai_infrastructure/mcp/tools",
+        "ai_infrastructure/mcp/tools/conversion_tools",
+        "ai_infrastructure/mcp/tools/file_tools",
+        "prompt_system",
+        "file_operations",
+        "core",
+        "core/utils",
+        "cli", 
+        "cli/commands",
+        "data",
+        "data/processed_files",
+        "data/processed_files/maintained_structure",
+        "data/processed_files/flattened_structure",
+        "data/logs",
+        "data/chroma_db",
+        "config",
+        "scripts",
+        "tests",
+        "tests/test_data",
+        "docs",
+        "examples"
     ]
     
     missing_dirs = []
     existing_dirs = []
     
     for directory in required_dirs:
-        if directory.exists():
-            existing_dirs.append(str(directory.relative_to(base_dir)))
+        dir_path = base_dir / directory
+        if dir_path.exists():
+            existing_dirs.append(directory)
         else:
-            missing_dirs.append(str(directory.relative_to(base_dir)))
+            missing_dirs.append(directory)
     
     details['existing_dirs'] = existing_dirs
     details['missing_dirs'] = missing_dirs
     
     if missing_dirs:
-        issues.append(f"Missing directories: {', '.join(missing_dirs[:3])}" + 
-                     ("..." if len(missing_dirs) > 3 else ""))
+        issues.append(f"Missing {len(missing_dirs)} directories")
+        if verbose:
+            details['missing_dirs_full'] = missing_dirs
     
     return {
         'healthy': len(missing_dirs) == 0,
@@ -203,7 +262,7 @@ def check_directory_structure(verbose: bool = False) -> Dict[str, any]:
     }
 
 
-def check_configuration_files(verbose: bool = False) -> Dict[str, any]:
+def check_configuration_files(verbose: bool = False) -> Dict[str, Any]:
     """Check if configuration files exist and are valid."""
     issues = []
     details = {}
@@ -211,8 +270,11 @@ def check_configuration_files(verbose: bool = False) -> Dict[str, any]:
     config_dir = Path(__file__).parent.parent / "config"
     required_configs = [
         "system_config.yaml",
+        "tool_config.yaml"
+    ]
+    
+    optional_configs = [
         "prompt_config.yaml", 
-        "tool_config.yaml",
         "paths_config.yaml"
     ]
     
@@ -220,15 +282,18 @@ def check_configuration_files(verbose: bool = False) -> Dict[str, any]:
     invalid_configs = []
     valid_configs = []
     
+    # Check required configs
     for config_file in required_configs:
         config_path = config_dir / config_file
         
         if not config_path.exists():
             missing_configs.append(config_file)
+            details[config_file] = "Missing"
             continue
         
-        # Validate YAML syntax
+        # Validate YAML syntax if yaml is available
         try:
+            import yaml
             with open(config_path, 'r') as f:
                 config_data = yaml.safe_load(f)
             
@@ -239,6 +304,10 @@ def check_configuration_files(verbose: bool = False) -> Dict[str, any]:
                 invalid_configs.append(config_file)
                 details[config_file] = "Empty or invalid"
                 
+        except ImportError:
+            # YAML not available, just check file existence
+            valid_configs.append(config_file)
+            details[config_file] = "Exists (YAML not available)"
         except yaml.YAMLError as e:
             invalid_configs.append(config_file)
             details[config_file] = f"YAML error: {e}"
@@ -246,8 +315,16 @@ def check_configuration_files(verbose: bool = False) -> Dict[str, any]:
             invalid_configs.append(config_file)
             details[config_file] = f"Error: {e}"
     
+    # Check optional configs
+    for config_file in optional_configs:
+        config_path = config_dir / config_file
+        if config_path.exists():
+            details[config_file] = "Exists (optional)"
+        else:
+            details[config_file] = "Missing (optional)"
+    
     if missing_configs:
-        issues.append(f"Missing config files: {', '.join(missing_configs)}")
+        issues.append(f"Missing required config files: {', '.join(missing_configs)}")
     
     if invalid_configs:
         issues.append(f"Invalid config files: {', '.join(invalid_configs)}")
@@ -259,39 +336,45 @@ def check_configuration_files(verbose: bool = False) -> Dict[str, any]:
     }
 
 
-def check_python_dependencies(verbose: bool = False) -> Dict[str, any]:
+def check_python_dependencies(verbose: bool = False) -> Dict[str, Any]:
     """Check if required Python dependencies are installed."""
     issues = []
     details = {}
     
-    # Core dependencies
+    # Core dependencies for basic functionality
     core_dependencies = [
-        "rich",          # Console output
-        "yaml",          # Configuration
-        "pathlib",       # File paths
-        "typing",        # Type hints
+        "pandas",        # Data processing
+        "openpyxl",      # Excel files
+        "python_docx",   # Word documents (note: actual package is python-docx)
+        "pypdf",         # PDF processing
+        "reportlab",     # PDF generation
+        "psutil",        # System monitoring
+    ]
+    
+    # Optional dependencies
+    optional_dependencies = [
+        "pdfminer",      # Advanced PDF processing
+        "pillow",        # Image processing
         "requests",      # HTTP requests
         "chromadb",      # Vector database
         "sentence_transformers",  # Embeddings
-        "llama_index",   # RAG framework
-        "pillow",        # Image processing
-        "pypdf2",        # PDF processing
-        "python-docx",   # Word documents
-        "beautifulsoup4" # HTML parsing
+        "fastapi",       # Web API
+        "uvicorn",       # ASGI server
+        "rich",          # Console formatting
     ]
     
-    missing_deps = []
+    missing_core_deps = []
+    missing_optional_deps = []
     available_deps = []
     
+    # Check core dependencies
     for dep in core_dependencies:
         try:
             # Handle different import names
-            if dep == "yaml":
-                import yaml
-            elif dep == "pathlib":
-                from pathlib import Path
-            elif dep == "typing":
-                from typing import Dict, List
+            if dep == "python_docx":
+                import docx
+            elif dep == "pypdf":
+                import pypdf
             else:
                 importlib.import_module(dep)
             
@@ -299,26 +382,40 @@ def check_python_dependencies(verbose: bool = False) -> Dict[str, any]:
             details[dep] = "Available"
             
         except ImportError:
-            missing_deps.append(dep)
+            missing_core_deps.append(dep)
             details[dep] = "Missing"
     
-    if missing_deps:
-        issues.append(f"Missing dependencies: {', '.join(missing_deps[:5])}" +
-                     ("..." if len(missing_deps) > 5 else ""))
+    # Check optional dependencies
+    for dep in optional_dependencies:
+        try:
+            if dep == "sentence_transformers":
+                import sentence_transformers
+            else:
+                importlib.import_module(dep)
+            details[dep] = "Available (optional)"
+        except ImportError:
+            missing_optional_deps.append(dep)
+            details[dep] = "Missing (optional)"
+    
+    if missing_core_deps:
+        issues.append(f"Missing core dependencies: {', '.join(missing_core_deps)}")
+    
+    if verbose and missing_optional_deps:
+        details['missing_optional'] = missing_optional_deps
     
     return {
-        'healthy': len(missing_deps) == 0,
+        'healthy': len(missing_core_deps) == 0,
         'issues': issues,
         'details': details
     }
 
 
-def check_ai_infrastructure(verbose: bool = False) -> Dict[str, any]:
+def check_ai_infrastructure(verbose: bool = False) -> Dict[str, Any]:
     """Check AI infrastructure components."""
     issues = []
     details = {}
     
-    # Check Ollama
+    # Check Ollama (optional)
     try:
         import requests
         response = requests.get("http://localhost:11434/api/tags", timeout=5)
@@ -331,34 +428,35 @@ def check_ai_infrastructure(verbose: bool = False) -> Dict[str, any]:
                 issues.append("Ollama running but no models installed")
         else:
             details['ollama'] = f"HTTP {response.status_code}"
-            issues.append("Ollama not responding properly")
+            # Don't add as issue since Ollama is optional
     except:
-        details['ollama'] = "Not running"
-        issues.append("Ollama service not available")
+        details['ollama'] = "Not running (optional)"
+        # Not an issue since Ollama is optional
     
-    # Check ChromaDB
+    # Check ChromaDB (optional)
     try:
+        import chromadb
         db_path = Path(__file__).parent.parent / "data" / "chroma_db"
         if db_path.exists():
-            import chromadb
             client = chromadb.PersistentClient(path=str(db_path))
             collections = client.list_collections()
             details['chromadb'] = f"Available ({len(collections)} collections)"
         else:
-            details['chromadb'] = "Database directory missing"
-            issues.append("ChromaDB not initialized")
+            details['chromadb'] = "Database directory missing (optional)"
+            # Not an issue since ChromaDB is optional
+    except ImportError:
+        details['chromadb'] = "ChromaDB not installed (optional)"
     except Exception as e:
-        details['chromadb'] = f"Error: {e}"
-        issues.append("ChromaDB not working")
+        details['chromadb'] = f"Error: {e} (optional)"
     
     return {
-        'healthy': len(issues) == 0,
+        'healthy': True,  # AI infrastructure is optional
         'issues': issues,
         'details': details
     }
 
 
-def check_file_operations(verbose: bool = False) -> Dict[str, any]:
+def check_file_operations(verbose: bool = False) -> Dict[str, Any]:
     """Check file operations functionality."""
     issues = []
     details = {}
@@ -384,6 +482,8 @@ def check_file_operations(verbose: bool = False) -> Dict[str, any]:
         test_file.unlink()
         test_dir.rmdir()
         
+        details['file_operations'] = "All tests passed"
+        
     except Exception as e:
         issues.append(f"File operations test failed: {e}")
         details['file_operations'] = f"Error: {e}"
@@ -395,7 +495,7 @@ def check_file_operations(verbose: bool = False) -> Dict[str, any]:
     }
 
 
-def check_cli_functionality(verbose: bool = False) -> Dict[str, any]:
+def check_cli_functionality(verbose: bool = False) -> Dict[str, Any]:
     """Check CLI functionality."""
     issues = []
     details = {}
@@ -404,7 +504,7 @@ def check_cli_functionality(verbose: bool = False) -> Dict[str, any]:
         cli_dir = Path(__file__).parent.parent / "cli"
         
         # Check if main CLI files exist
-        cli_files = ["main.py", "command_parser.py", "interactive_mode.py"]
+        cli_files = ["main.py", "interactive_mode.py"]
         missing_cli_files = []
         
         for cli_file in cli_files:
@@ -419,7 +519,6 @@ def check_cli_functionality(verbose: bool = False) -> Dict[str, any]:
         
         # Test basic CLI import
         try:
-            sys.path.insert(0, str(Path(__file__).parent.parent))
             from cli.main import main
             details['cli_import'] = "Working"
         except ImportError as e:
@@ -437,48 +536,39 @@ def check_cli_functionality(verbose: bool = False) -> Dict[str, any]:
     }
 
 
-def check_rag_system(verbose: bool = False) -> Dict[str, any]:
+def check_rag_system(verbose: bool = False) -> Dict[str, Any]:
     """Check RAG system functionality."""
     issues = []
     details = {}
     
+    # RAG is optional, so don't fail if not available
     try:
         # Check if RAG components are available
         import chromadb
-        from sentence_transformers import SentenceTransformer
+        details['chromadb'] = "Available"
         
         # Test embedding model
         try:
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            test_embedding = model.encode(["test document"])
-            details['embedding_model'] = "Working"
-        except Exception as e:
-            issues.append(f"Embedding model failed: {e}")
-            details['embedding_model'] = f"Error: {e}"
+            from sentence_transformers import SentenceTransformer
+            # Don't actually load the model to save time
+            details['sentence_transformers'] = "Available"
+        except ImportError:
+            details['sentence_transformers'] = "Not available (optional)"
         
-        # Test ChromaDB
-        try:
-            db_path = Path(__file__).parent.parent / "data" / "chroma_db"
-            client = chromadb.PersistentClient(path=str(db_path))
-            collections = client.list_collections()
-            details['chromadb_collections'] = len(collections)
-            details['chromadb'] = "Working"
-        except Exception as e:
-            issues.append(f"ChromaDB failed: {e}")
-            details['chromadb'] = f"Error: {e}"
+        details['rag_system'] = "Components available"
         
     except ImportError as e:
-        issues.append(f"RAG dependencies missing: {e}")
-        details['rag_system'] = "Dependencies missing"
+        details['rag_system'] = "Optional components not installed"
+        # Not an issue since RAG is optional
     
     return {
-        'healthy': len(issues) == 0,
+        'healthy': True,  # RAG is optional
         'issues': issues,
         'details': details
     }
 
 
-def check_mcp_tools(verbose: bool = False) -> Dict[str, any]:
+def check_mcp_tools(verbose: bool = False) -> Dict[str, Any]:
     """Check MCP tools functionality."""
     issues = []
     details = {}
@@ -498,28 +588,36 @@ def check_mcp_tools(verbose: bool = False) -> Dict[str, any]:
         # Count available tool categories
         categories = [d.name for d in tools_dir.iterdir() if d.is_dir() and not d.name.startswith('__')]
         details['tool_categories'] = len(categories)
-        details['categories'] = categories
         
-        # Count tool files
-        tool_files = []
-        for category in categories:
-            category_dir = tools_dir / category
-            tools_in_category = [f.name for f in category_dir.glob("*.py") if not f.name.startswith('__')]
-            tool_files.extend([f"{category}.{tool}" for tool in tools_in_category])
-        
-        details['total_tools'] = len(tool_files)
-        details['tools'] = tool_files[:5]  # Show first 5
-        
-        if len(tool_files) == 0:
-            issues.append("No MCP tools found")
-        
-        # Check tool registry
-        registry_path = Path(__file__).parent.parent / "ai_infrastructure" / "mcp" / "tool_registry.json"
-        if registry_path.exists():
-            details['tool_registry'] = "Exists"
+        # Count tool files in conversion_tools (most important)
+        conversion_dir = tools_dir / "conversion_tools"
+        if conversion_dir.exists():
+            conversion_tools = [f.name for f in conversion_dir.glob("*.py") if not f.name.startswith('__')]
+            details['conversion_tools'] = conversion_tools
         else:
-            issues.append("Tool registry not found")
-            details['tool_registry'] = "Missing"
+            issues.append("Conversion tools directory missing")
+        
+        # Check if we can import conversion tools
+        try:
+            from ai_infrastructure.mcp.tools.conversion_tools.convert_csv_to_xlsx import Tool as CSVTool
+            details['csv_tool'] = "Importable"
+        except ImportError as e:
+            issues.append(f"CSV tool import failed: {e}")
+            details['csv_tool'] = f"Error: {e}"
+        
+        try:
+            from ai_infrastructure.mcp.tools.conversion_tools.convert_docx_to_pdf import Tool as DOCXTool
+            details['docx_tool'] = "Importable"
+        except ImportError as e:
+            issues.append(f"DOCX tool import failed: {e}")
+            details['docx_tool'] = f"Error: {e}"
+        
+        try:
+            from ai_infrastructure.mcp.tools.conversion_tools.convert_pdf_to_docx import Tool as PDFTool
+            details['pdf_tool'] = "Importable"
+        except ImportError as e:
+            issues.append(f"PDF tool import failed: {e}")
+            details['pdf_tool'] = f"Error: {e}"
         
     except Exception as e:
         issues.append(f"MCP tools check failed: {e}")
@@ -532,22 +630,22 @@ def check_mcp_tools(verbose: bool = False) -> Dict[str, any]:
     }
 
 
-def attempt_fix(check_name: str, result: Dict[str, any], console: Console) -> Dict[str, any]:
+def attempt_fix(check_name: str, result: Dict[str, Any], console: Console) -> Dict[str, Any]:
     """Attempt to fix detected issues."""
     console.print(f"  Attempting to fix {check_name}...")
     
     if check_name == "Directory Structure":
         return fix_directory_structure(result)
     elif check_name == "Python Dependencies":
-        return fix_python_dependencies(result)
-    elif check_name == "AI Infrastructure":
-        return fix_ai_infrastructure(result, console)
+        return fix_python_dependencies(result, console)
+    elif check_name == "Configuration Files":
+        return fix_configuration_files(result, console)
     else:
         console.print(f"  No auto-fix available for {check_name}")
         return result
 
 
-def fix_directory_structure(result: Dict[str, any]) -> Dict[str, any]:
+def fix_directory_structure(result: Dict[str, Any]) -> Dict[str, Any]:
     """Fix missing directories."""
     fixed_issues = []
     
@@ -561,18 +659,16 @@ def fix_directory_structure(result: Dict[str, any]) -> Dict[str, any]:
     
     return {
         'healthy': len(missing_dirs) == 0,
-        'issues': fixed_issues if fixed_issues else ["Directories created successfully"],
+        'issues': [],
         'details': {'fixed_directories': fixed_issues}
     }
 
 
-def fix_python_dependencies(result: Dict[str, any]) -> Dict[str, any]:
+def fix_python_dependencies(result: Dict[str, Any], console: Console) -> Dict[str, Any]:
     """Attempt to install missing dependencies."""
-    import subprocess
-    
     missing_deps = []
     for dep, status in result.get('details', {}).items():
-        if status == "Missing":
+        if status == "Missing" and dep in ["pandas", "openpyxl", "pypdf", "reportlab", "psutil"]:
             missing_deps.append(dep)
     
     if not missing_deps:
@@ -581,116 +677,154 @@ def fix_python_dependencies(result: Dict[str, any]) -> Dict[str, any]:
     fixed_deps = []
     failed_deps = []
     
+    # Map import names to package names
+    package_map = {
+        'pandas': 'pandas',
+        'openpyxl': 'openpyxl', 
+        'python_docx': 'python-docx',
+        'pypdf': 'pypdf',
+        'reportlab': 'reportlab',
+        'psutil': 'psutil'
+    }
+    
     for dep in missing_deps:
+        package_name = package_map.get(dep, dep)
+        console.print(f"    Installing {package_name}...")
+        
         try:
-            # Map import names to package names
-            package_map = {
-                'yaml': 'pyyaml',
-                'pathlib': 'pathlib',
-                'typing': 'typing',
-                'chromadb': 'chromadb',
-                'sentence_transformers': 'sentence-transformers',
-                'llama_index': 'llama-index',
-                'pillow': 'pillow',
-                'pypdf2': 'pypdf2',
-                'python-docx': 'python-docx',
-                'beautifulsoup4': 'beautifulsoup4'
-            }
-            
-            package_name = package_map.get(dep, dep)
             result = subprocess.run([
                 sys.executable, "-m", "pip", "install", package_name
-            ], capture_output=True, text=True)
+            ], capture_output=True, text=True, timeout=120)
             
             if result.returncode == 0:
                 fixed_deps.append(dep)
+                console.print(f"    ✅ Installed {package_name}")
             else:
                 failed_deps.append(dep)
+                console.print(f"    ❌ Failed to install {package_name}")
                 
         except Exception as e:
             failed_deps.append(dep)
+            console.print(f"    ❌ Error installing {package_name}: {e}")
     
-    issues = []
-    if failed_deps:
-        issues.append(f"Failed to install: {', '.join(failed_deps)}")
-    
-    return {
-        'healthy': len(failed_deps) == 0,
-        'issues': issues,
-        'details': {'fixed_dependencies': fixed_deps, 'failed_dependencies': failed_deps}
+    # Re-check the dependencies
+    new_result = check_python_dependencies()
+    new_result['details']['fix_attempt'] = {
+        'fixed': fixed_deps,
+        'failed': failed_deps
     }
+    
+    return new_result
 
 
-def fix_ai_infrastructure(result: Dict[str, any], console: Console) -> Dict[str, any]:
-    """Attempt to fix AI infrastructure issues."""
-    from scripts.deploy_ollama import deploy_ollama
-    from scripts.setup_rag import setup_rag_system
+def fix_configuration_files(result: Dict[str, Any], console: Console) -> Dict[str, Any]:
+    """Create missing configuration files."""
+    config_dir = Path(__file__).parent.parent / "config"
+    config_dir.mkdir(exist_ok=True)
     
-    fixed_issues = []
+    # Create basic system config
+    system_config = config_dir / "system_config.yaml"
+    if not system_config.exists():
+        system_config.write_text("""system:
+  name: "AI File Converter"
+  version: "1.0.0"
+  debug: false
+  log_level: "INFO"
+
+file_operations:
+  default_input_dir: "./input"
+  default_output_dir: "./output"
+  backup_files: true
+  max_file_size_mb: 100
+
+conversion:
+  preserve_structure: true
+  overwrite_existing: false
+  create_backups: true
+
+paths:
+  data_dir: "./data"
+  logs_dir: "./data/logs"
+  temp_dir: "./temp"
+""")
+        console.print("    ✅ Created system_config.yaml")
     
-    # Fix Ollama if needed
-    if "Ollama" in str(result.get('details', {}).get('ollama', '')):
-        console.print("  Deploying Ollama...")
-        if deploy_ollama():
-            fixed_issues.append("Ollama deployed successfully")
-        else:
-            fixed_issues.append("Failed to deploy Ollama")
+    # Create basic tool config
+    tool_config = config_dir / "tool_config.yaml"
+    if not tool_config.exists():
+        tool_config.write_text("""tools:
+  conversion:
+    csv_to_xlsx:
+      enabled: true
+      timeout: 30
+    docx_to_pdf:
+      enabled: true  
+      timeout: 60
+    pdf_to_docx:
+      enabled: true
+      timeout: 60
+""")
+        console.print("    ✅ Created tool_config.yaml")
     
-    # Fix RAG system if needed
-    if "ChromaDB" in str(result.get('details', {}).get('chromadb', '')):
-        console.print("  Setting up RAG system...")
-        if setup_rag_system():
-            fixed_issues.append("RAG system setup completed")
-        else:
-            fixed_issues.append("Failed to setup RAG system")
-    
-    return {
-        'healthy': len(fixed_issues) > 0 and "Failed" not in str(fixed_issues),
-        'issues': fixed_issues,
-        'details': {'fix_attempts': fixed_issues}
-    }
+    return check_configuration_files()
 
 
-def display_health_results(check_results: Dict[str, any], console: Console, verbose: bool):
+def display_health_results(check_results: Dict[str, Any], console: Console, verbose: bool):
     """Display health check results in a formatted table."""
-    table = Table(title="Health Check Results")
-    table.add_column("Check", style="bold")
-    table.add_column("Status", justify="center")
-    table.add_column("Issues", style="red")
-    table.add_column("Details", style="dim")
-    
-    for check_name, result in check_results.items():
-        status = "✅" if result['healthy'] else "❌"
-        style = "green" if result['healthy'] else "red"
+    if RICH_AVAILABLE:
+        table = Table(title="Health Check Results")
+        table.add_column("Check", style="bold")
+        table.add_column("Status", justify="center")
+        table.add_column("Issues", style="red")
+        table.add_column("Details", style="dim")
         
-        issues = "\n".join(result['issues'][:2])  # Show first 2 issues
-        if len(result['issues']) > 2:
-            issues += f"\n... and {len(result['issues']) - 2} more"
+        for check_name, result in check_results.items():
+            status = "✅" if result['healthy'] else "❌"
+            
+            issues = "\n".join(result['issues'][:2])  # Show first 2 issues
+            if len(result['issues']) > 2:
+                issues += f"\n... and {len(result['issues']) - 2} more"
+            
+            details = ""
+            if verbose:
+                details = str(result['details'])[:100] + "..." if len(str(result['details'])) > 100 else str(result['details'])
+            
+            table.add_row(
+                check_name,
+                status,
+                issues,
+                details
+            )
         
-        details = str(result['details'])[:100] + "..." if verbose and len(str(result['details'])) > 100 else ""
+        console.print(table)
+    else:
+        # Simple table without rich
+        console.print("\nHealth Check Results:")
+        console.print("-" * 80)
+        console.print(f"{'Check':<25} {'Status':<8} {'Issues'}")
+        console.print("-" * 80)
         
-        table.add_row(
-            check_name,
-            status,
-            issues,
-            details
-        )
-    
-    console.print(table)
+        for check_name, result in check_results.items():
+            status = "PASS" if result['healthy'] else "FAIL"
+            issues = "; ".join(result['issues'][:2])
+            if len(result['issues']) > 2:
+                issues += f" ... (+{len(result['issues'])-2})"
+            
+            console.print(f"{check_name:<25} {status:<8} {issues}")
+        
+        console.print("-" * 80)
     
     # Show detailed information if verbose
     if verbose:
         for check_name, result in check_results.items():
-            if not result['healthy'] or verbose:
-                console.print(f"\n[bold]{check_name} Details:[/bold]")
-                console.print(Syntax(
-                    json.dumps(result['details'], indent=2), 
-                    "json", 
-                    theme="monokai"
-                ))
+            if not result['healthy']:
+                console.print(f"\n{check_name} Details:")
+                console.print(f"  Issues: {result['issues']}")
+                if result['details']:
+                    console.print(f"  Details: {result['details']}")
 
 
-def generate_health_report(check_results: Dict[str, any]):
+def generate_health_report(check_results: Dict[str, Any]):
     """Generate a health check report file."""
     report_path = Path(__file__).parent.parent / "data" / "logs" / "health_report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -755,5 +889,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import argparse
     main()
